@@ -17,11 +17,6 @@
         android:theme="@style/Theme.RssiTrigger"
         android:allowBackup="false">
 
-        <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposedminversion" android:value="93" />
-        <meta-data android:name="xposeddescription" android:value="根据蓝牙信号强度(RSSI)触发shell命令" />
-        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
-
         <activity
             android:name=".ui.MainActivity"
             android:exported="true">

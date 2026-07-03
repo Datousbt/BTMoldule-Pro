@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -27,57 +29,45 @@ import com.datousbt.btmodulepro.ui.MainActivity;
 import com.datousbt.btmodulepro.util.LogManager;
 
 import java.io.FileWriter;
+import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 前台服务 — 蓝牙 RSSI 监听 + 命令触发。
- * 不依赖 LSPosed hook，在 APP 进程内通过标准 Android API 完成。
- */
 public class RssiForegroundService extends Service {
 
     private static final String TAG = "RssiService";
-    private static final String CHANNEL_ID = "rssi_service";
+    private static final String CHANNEL_ID = "rssi_monitor";
     private static final int NOTIFY_ID = 1;
 
     private BluetoothAdapter btAdapter;
+    private BluetoothManager btManager;
     private RssiTriggerEngine engine;
     private Config config;
     private HandlerThread workerThread;
     private Handler worker;
-    private boolean running = false;
+    private boolean running;
 
-    private final Map<String, Integer> rssiCache = new ConcurrentHashMap<>();
-    private final Map<String, Long> rssiTimeCache = new ConcurrentHashMap<>();
-
-    private final Runnable pollRunnable = new Runnable() {
-        public void run() {
-            pollRssi();
-            if (running && worker != null) {
-                worker.postDelayed(this, 5000);
-            }
-        }
-    };
+    private final Map<String, Integer> rssiCache = new LinkedHashMap<>();
+    private final Map<String, Long> rssiTimeCache = new LinkedHashMap<>();
+    private final Map<String, String> nameCache = new LinkedHashMap<>();
 
     @Override
     public void onCreate() {
         super.onCreate();
-        Log.i(TAG, "Service onCreate");
-        createNotificationChannel();
+        createChannel();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.i(TAG, "Service onStartCommand");
         if (!running) start();
         return START_STICKY;
     }
 
     @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
@@ -85,42 +75,52 @@ public class RssiForegroundService extends Service {
         super.onDestroy();
     }
 
-    // --- 启动/停止 ---
+    // ==================== 启动 / 停止 ====================
 
     private void start() {
         running = true;
-        btAdapter = BluetoothAdapter.getDefaultAdapter();
+        btManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        btAdapter = btManager.getAdapter();
+        if (btAdapter == null) {
+            Log.e(TAG, "Bluetooth not available, stopping");
+            stopSelf();
+            return;
+        }
+
         config = ConfigManager.load(this);
         engine = new RssiTriggerEngine(config);
         LogManager.configure(config.logEnabled, config.logPath, config.logMaxSizeKb);
-        LogManager.i(TAG, "Service started, rules=" + config.rules.size());
+        LogManager.i(TAG, "Service started. rules=" + config.rules.size() +
+                " mode=" + config.rssiMode + " poll=" + config.pollInterval + "ms");
+        Log.i(TAG, "Service started. rules=" + config.rules.size());
 
         workerThread = new HandlerThread("RssiWorker");
         workerThread.start();
         worker = new Handler(workerThread.getLooper());
 
         // 前台通知
-        Notification notification = new Notification.Builder(this, CHANNEL_ID)
+        PendingIntent pi = PendingIntent.getActivity(this, 0,
+                new Intent(this, MainActivity.class),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification n = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("蓝牙触发器运行中")
-                .setContentText("正在监听蓝牙信号强度")
+                .setContentText("监听蓝牙信号强度")
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentIntent(PendingIntent.getActivity(this, 0,
-                        new Intent(this, MainActivity.class),
-                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
+                .setContentIntent(pi)
                 .setOngoing(true)
                 .build();
-        startForeground(NOTIFY_ID, notification);
+        startForeground(NOTIFY_ID, n);
 
-        // 注册蓝牙广播
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
-        filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
-        filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-        registerReceiver(btReceiver, filter);
+        // 蓝牙连接广播
+        IntentFilter f = new IntentFilter();
+        f.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+        f.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+        registerReceiver(btReceiver, f);
 
-        // 启动轮询
-        worker.post(pollRunnable);
-        Log.i(TAG, "Service fully started");
+        // RSSI 轮询
+        int interval = config.pollInterval > 0 ? config.pollInterval : 5000;
+        worker.postDelayed(pollRunnable, 1000); // 1秒后首次轮询
+        Log.i(TAG, "Poll interval=" + interval + "ms");
     }
 
     private void stop() {
@@ -128,105 +128,164 @@ public class RssiForegroundService extends Service {
         if (worker != null) worker.removeCallbacks(pollRunnable);
         if (workerThread != null) workerThread.quitSafely();
         try { unregisterReceiver(btReceiver); } catch (Exception ignored) {}
-        stopForeground(true);
+        stopForeground(STOP_FOREGROUND_REMOVE);
         LogManager.i(TAG, "Service stopped");
     }
 
-    // --- 蓝牙广播 ---
+    // ==================== 蓝牙广播 ====================
 
     private final BroadcastReceiver btReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+        public void onReceive(Context ctx, Intent intent) {
+            BluetoothDevice dev = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if (dev == null) return;
+            String mac = dev.getAddress();
+            String name = dev.getName();
 
-            if (device == null) return;
-
-            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)) {
-                Log.i(TAG, "ACL connected: " + device.getAddress());
-                // 立即读一次 RSSI
-                readRssiNow(device);
-            } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
-                Log.i(TAG, "ACL disconnected: " + device.getAddress());
-                rssiCache.remove(device.getAddress());
-                rssiTimeCache.remove(device.getAddress());
-            } else if (BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED.equals(action)) {
-                int state = intent.getIntExtra(BluetoothAdapter.EXTRA_CONNECTION_STATE, -1);
-                if (state == BluetoothAdapter.STATE_CONNECTED) {
-                    Log.i(TAG, "BT connected: " + device.getAddress());
-                    readRssiNow(device);
-                }
+            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(intent.getAction())) {
+                Log.i(TAG, "ACL connected: " + mac);
+                nameCache.put(mac, name != null ? name : "");
+                // 连接时立刻查 RSSI
+                queryRssi(dev);
+            } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(intent.getAction())) {
+                Log.i(TAG, "ACL disconnected: " + mac);
+                rssiCache.remove(mac);
+                rssiTimeCache.put(mac, System.currentTimeMillis());
+                // 断开视为 RSSI = -100（极弱信号）
+                if (engine != null)
+                    engine.evaluate(mac, nameCache.getOrDefault(mac, ""), -100);
+                writeStatus();
             }
         }
     };
 
-    // --- RSSI 轮询 ---
+    // ==================== RSSI 轮询 ====================
 
-    private void pollRssi() {
-        if (!running || btAdapter == null || !btAdapter.isEnabled()) return;
+    private final Runnable pollRunnable = new Runnable() {
+        public void run() {
+            if (!running || !btAdapter.isEnabled()) {
+                worker.postDelayed(this, 5000);
+                return;
+            }
 
-        // 热加载配置
-        config = ConfigManager.load(this);
-        LogManager.configure(config.logEnabled, config.logPath, config.logMaxSizeKb);
-        engine.config = config;
+            // 热加载配置
+            Config newCfg = ConfigManager.load(RssiForegroundService.this);
+            if (config.rules.size() != newCfg.rules.size() ||
+                    config.rssiMode != newCfg.rssiMode ||
+                    config.logEnabled != newCfg.logEnabled) {
+                LogManager.configure(newCfg.logEnabled, newCfg.logPath, newCfg.logMaxSizeKb);
+                LogManager.i(TAG, "Config reloaded");
+            }
+            config = newCfg;
+            engine.config = config;
 
-        // 获取所有已连接设备
+            // 获取已连接设备并查询 RSSI
+            pollConnectedDevices();
+
+            int interval = config.pollInterval > 0 ? config.pollInterval : 5000;
+            worker.postDelayed(this, interval);
+        }
+    };
+
+    private void pollConnectedDevices() {
+        Set<BluetoothDevice> devices = new HashSet<>();
+
+        // API 31+: 公开 API 获取已连接设备
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try { devices.addAll(btManager.getConnectedDevices(BluetoothProfile.GATT)); }
+            catch (SecurityException ignored) {}
+            try { devices.addAll(btManager.getConnectedDevices(BluetoothProfile.A2DP)); }
+            catch (SecurityException ignored) {}
+            try { devices.addAll(btManager.getConnectedDevices(BluetoothProfile.HEADSET)); }
+            catch (SecurityException ignored) {}
+        }
+
+        // 备用: 检查所有已配对设备中哪些是连接的
         try {
-            Set<BluetoothDevice> devices = btAdapter.getBondedDevices();
-            if (devices == null) return;
-            for (BluetoothDevice device : devices) {
-                readRssiNow(device);
+            for (BluetoothDevice d : btAdapter.getBondedDevices()) {
+                if (btAdapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothAdapter.STATE_CONNECTED
+                        && d.getAddress().equals(getActiveDevice(BluetoothProfile.A2DP))) {
+                    devices.add(d);
+                }
             }
         } catch (SecurityException ignored) {}
+
+        // 备用: 反射 getMostRecentlyConnectedDevices
+        try {
+            Method m = btAdapter.getClass().getMethod("getMostRecentlyConnectedDevices");
+            @SuppressWarnings("unchecked")
+            List<BluetoothDevice> list = (List<BluetoothDevice>) m.invoke(btAdapter);
+            if (list != null) devices.addAll(list);
+        } catch (Exception ignored) {}
+
+        // 对每个已连接设备查询 RSSI
+        for (BluetoothDevice d : devices) {
+            String mac = d.getAddress();
+            // 只查询配置了规则的设备
+            boolean interested = false;
+            for (TriggerRule r : config.rules) {
+                if (r.enable && mac.equalsIgnoreCase(r.mac)) { interested = true; break; }
+            }
+            if (!interested) continue;
+
+            String name = d.getName();
+            if (name != null) nameCache.put(mac, name);
+            queryRssi(d);
+        }
+
+        writeStatus();
     }
 
-    private void readRssiNow(BluetoothDevice device) {
+    private String getActiveDevice(int profile) {
         try {
-            // 先检查这个设备是否是我们在意的
-            boolean interested = false;
-            for (TriggerRule rule : config.rules) {
-                if (rule.enable && device.getAddress().equalsIgnoreCase(rule.mac)) {
-                    interested = true;
-                    break;
-                }
+            Method m = btAdapter.getClass().getMethod("getActiveDevice", int.class);
+            BluetoothDevice d = (BluetoothDevice) m.invoke(btAdapter, profile);
+            return d != null ? d.getAddress() : null;
+        } catch (Exception e) { return null; }
+    }
+
+    private void queryRssi(BluetoothDevice device) {
+        // 方案1: 反射 getRssi() —— 隐藏API，多数HyperOS/小米ROM可用
+        try {
+            Method m = BluetoothDevice.class.getMethod("getRssi");
+            Integer rssi = (Integer) m.invoke(device);
+            if (rssi != null && rssi < 0 && rssi >= -100) {
+                handleRssi(device, rssi);
+                return;
             }
-            if (!interested) return;
+        } catch (Exception ignored) {}
 
-            // 用反射调 readRemoteRssi（隐藏API）
-            java.lang.reflect.Method m = BluetoothDevice.class.getMethod("readRemoteRssi");
+        // 方案2: 反射 mRssi 字段
+        try {
+            java.lang.reflect.Field f = BluetoothDevice.class.getDeclaredField("mRssi");
+            f.setAccessible(true);
+            Short rssi = (Short) f.get(device);
+            if (rssi != null && rssi < 0 && rssi >= -100) {
+                handleRssi(device, (int) rssi);
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // 方案3: 调用 readRemoteRssi() 触发异步读取
+        try {
+            Method m = BluetoothDevice.class.getMethod("readRemoteRssi");
             m.invoke(device);
-
-            // 同时尝试读取缓存的 RSSI
-            // getRssi() 在某些 Android 版本上是隐藏的
-            try {
-                java.lang.reflect.Method getRssi = BluetoothDevice.class.getMethod("getRssi");
-                Integer rssi = (Integer) getRssi.invoke(device);
-                if (rssi != null) {
-                    onRssiUpdate(device, rssi);
-                }
-            } catch (NoSuchMethodException ignored) {}
-
         } catch (Exception ignored) {}
     }
 
-    private void onRssiUpdate(BluetoothDevice device, int rssi) {
-        if (rssi >= 0 || rssi < -100) return;
-
+    private void handleRssi(BluetoothDevice device, int rssi) {
         String mac = device.getAddress();
-        String name = device.getName();
-
         Integer old = rssiCache.put(mac, rssi);
         rssiTimeCache.put(mac, System.currentTimeMillis());
         if (old != null && old == rssi) return;
 
+        String name = nameCache.getOrDefault(mac, "");
         Log.d(TAG, "RSSI: " + mac + " = " + rssi + " dBm");
+        LogManager.d(TAG, "RSSI: " + mac + " = " + rssi);
 
-        // 写状态文件（UI 读取）
-        writeStatus();
-
-        // 触发规则
-        engine.evaluate(mac, name != null ? name : "", rssi);
+        if (engine != null) engine.evaluate(mac, name, rssi);
     }
+
+    // ==================== 状态文件 ====================
 
     private void writeStatus() {
         try {
@@ -235,26 +294,30 @@ public class RssiForegroundService extends Service {
             for (Map.Entry<String, Integer> e : rssiCache.entrySet()) {
                 if (!first) sb.append(",");
                 first = false;
-                sb.append("\"").append(e.getKey()).append("\":{");
-                sb.append("\"name\":\"\",");
+                String mac = e.getKey();
+                sb.append("\"").append(mac).append("\":{");
+                sb.append("\"name\":\"").append(esc(nameCache.getOrDefault(mac, ""))).append("\",");
                 sb.append("\"rssi\":").append(e.getValue()).append(",");
-                sb.append("\"time\":").append(rssiTimeCache.getOrDefault(e.getKey(), 0L)).append("}");
+                sb.append("\"time\":").append(rssiTimeCache.getOrDefault(mac, 0L)).append("}");
             }
             sb.append("}}");
-            FileWriter fw = new FileWriter(
-                    new java.io.File(getFilesDir(), "rssi_status.json"));
+            FileWriter fw = new FileWriter(new java.io.File(getFilesDir(), "rssi_status.json"));
             fw.write(sb.toString());
             fw.flush();
             fw.close();
         } catch (Exception ignored) {}
     }
 
-    private void createNotificationChannel() {
+    private static String esc(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
+            NotificationChannel ch = new NotificationChannel(
                     CHANNEL_ID, "蓝牙信号监听", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("蓝牙触发器运行状态");
-            getSystemService(NotificationManager.class).createNotificationChannel(channel);
+            ch.setDescription("蓝牙触发器后台运行状态");
+            getSystemService(NotificationManager.class).createNotificationChannel(ch);
         }
     }
 }

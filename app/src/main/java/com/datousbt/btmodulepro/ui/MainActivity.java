@@ -1,13 +1,13 @@
 package com.datousbt.btmodulepro.ui;
 
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -80,7 +80,12 @@ public class MainActivity extends AppCompatActivity {
                 startActivityForResult(new Intent(this, RuleEditActivity.class), REQUEST_EDIT));
 
         // 启动前台服务
-        startService(new Intent(this, RssiForegroundService.class));
+        Intent svc = new Intent(this, RssiForegroundService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(svc);
+        } else {
+            startService(svc);
+        }
     }
 
     @Override
@@ -127,7 +132,7 @@ public class MainActivity extends AppCompatActivity {
             java.util.Map<String, String> rssiMap = new java.util.LinkedHashMap<>();
             long now = System.currentTimeMillis();
 
-            File f = new File("/data/data/com.datousbt.btmodulepro/files/rssi_status.json");
+            File f = new File(getFilesDir(), "rssi_status.json");
             if (f.exists()) {
                 // 读取 hook 写的 RSSI 状态文件
                 StringBuilder sb = new StringBuilder();
