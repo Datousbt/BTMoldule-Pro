@@ -38,7 +38,7 @@ public class MainActivity extends AppCompatActivity {
     private Config config;
 
     // RSSI 实时显示
-    private LinearLayout rssiPanel;
+    private View rssiPanel;
     private TextView rssiStatusText;
     private final Handler rssiHandler = new Handler(Looper.getMainLooper());
     private final Runnable rssiRefresher = new Runnable() {
