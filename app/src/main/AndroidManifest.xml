@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+
+    <application
+        android:label="蓝牙触发器"
+        android:theme="@style/Theme.RssiTrigger"
+        android:allowBackup="false">
+
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <meta-data android:name="xposeddescription" android:value="根据蓝牙信号强度(RSSI)触发shell命令" />
+        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.RuleEditActivity"
+            android:exported="false"/>
+
+        <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="false"/>
+
+    </application>
+
+</manifest>

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">蓝牙触发器</string>
+    <string name="add_rule">添加规则</string>
+    <string name="edit_rule">编辑规则</string>
+    <string name="untitled_rule">未命名规则</string>
+    <string name="rule_name">规则名称</string>
+    <string name="device_mac">设备 MAC 地址</string>
+    <string name="device_name_filter">设备名称过滤 (可选)</string>
+    <string name="save">保存</string>
+    <string name="delete">删除</string>
+    <string name="cancel">取消</string>
+    <string name="enable">启用</string>
+    <string name="no_rules">暂无触发规则</string>
+    <string name="confirm_delete">确认删除此规则?</string>
+    <string name="name_required">请输入规则名称</string>
+    <string name="mac_required">请输入MAC地址</string>
+    <string name="mac_hint">00:00:00:00:00:00</string>
+    <string name="import_paired">导入已配对设备</string>
+    <string name="select_paired_device">选择已配对的蓝牙设备</string>
+    <string name="no_paired_devices">没有已配对的蓝牙设备</string>
+    <string name="bluetooth_permission_required">需要蓝牙权限</string>
+    <string name="command_hint">以 root 权限执行的 shell 命令，或 .sh 脚本路径</string>
+
+    <!-- 双阈值 -->
+    <string name="threshold_title">RSSI 信号阈值</string>
+    <string name="above_threshold">接近阈值 (dBm)</string>
+    <string name="above_threshold_hint">RSSI 高于此值时认为信号强，触发上方命令</string>
+    <string name="below_threshold">远离阈值 (dBm)</string>
+    <string name="below_threshold_hint">RSSI 低于此值时认为信号弱，触发下方命令</string>
+    <string name="hysteresis">回滞 (dBm)</string>
+    <string name="debounce">防抖间隔 (ms)</string>
+    <string name="above_command">信号强时执行 (接近)</string>
+    <string name="below_command">信号弱时执行 (远离)</string>
+
+    <!-- 设置 -->
+    <string name="settings">设置</string>
+    <string name="rssi_mode">RSSI 信号获取方式</string>
+    <string name="mode_passive">仅被动监听 (接收系统蓝牙回调)</string>
+    <string name="mode_active">仅主动轮询 (定时读取 RSSI)</string>
+    <string name="mode_mixed">被动监听 + 主动轮询 (推荐)</string>
+    <string name="mode_hint">被动监听省电但依赖设备上报频率；主动轮询更及时但稍费电</string>
+    <string name="poll_interval_label">主动轮询间隔 (毫秒)</string>
+    <string name="poll_interval_range">范围: 1000 ~ 60000 ms (1秒 ~ 60秒)</string>
+    <string name="settings_saved">设置已保存，重启后生效</string>
+</resources>

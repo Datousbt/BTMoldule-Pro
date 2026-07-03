@@ -1,0 +1,6 @@
+id=com.datousbt.btmodulepro
+name=蓝牙触发器
+version=1.0
+versionCode=1
+author=Datousbt
+description=根据蓝牙信号强度(RSSI)触发shell命令
