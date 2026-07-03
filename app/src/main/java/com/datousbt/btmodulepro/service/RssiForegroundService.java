@@ -19,7 +19,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
-import android.os.PowerManager;
 import android.util.Log;
 
 import com.datousbt.btmodulepro.R;
@@ -48,7 +47,6 @@ public class RssiForegroundService extends Service {
     private Config config;
     private HandlerThread worker;
     private Handler handler;
-    private PowerManager.WakeLock wakeLock;
     private boolean running;
 
     // BLE 扫描结果缓存
@@ -79,7 +77,6 @@ public class RssiForegroundService extends Service {
 
     // ==================== 启动/停止 ====================
 
-    @SuppressWarnings("deprecation")
     private void start() {
         running = true;
         btAdapter = ((BluetoothManager) getSystemService(BLUETOOTH_SERVICE)).getAdapter();
@@ -109,11 +106,6 @@ public class RssiForegroundService extends Service {
         worker.start();
         handler = new Handler(worker.getLooper());
 
-        // 唤醒锁（防止深度休眠中断扫描）
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG + ":wakelock");
-        wakeLock.acquire(10 * 60 * 1000L); // 10分钟
-
         // 启动 BLE 扫描
         startBleScan();
 
@@ -126,7 +118,6 @@ public class RssiForegroundService extends Service {
         stopBleScan();
         if (handler != null) handler.removeCallbacks(configReloader);
         if (worker != null) worker.quitSafely();
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         stopForeground(STOP_FOREGROUND_REMOVE);
         LogManager.i(TAG, "Service stopped");
     }
@@ -229,11 +220,6 @@ public class RssiForegroundService extends Service {
             }
             config = newCfg;
             engine.config = config;
-
-            // 续期唤醒锁
-            if (wakeLock != null && !wakeLock.isHeld()) {
-                wakeLock.acquire(10 * 60 * 1000L);
-            }
 
             handler.postDelayed(this, 5000);
         }

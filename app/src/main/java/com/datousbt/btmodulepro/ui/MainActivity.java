@@ -3,6 +3,7 @@ package com.datousbt.btmodulepro.ui;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Menu;
@@ -79,13 +80,19 @@ public class MainActivity extends AppCompatActivity {
         addBtn.setOnClickListener(v ->
                 startActivityForResult(new Intent(this, RuleEditActivity.class), REQUEST_EDIT));
 
-        // 启动前台服务
-        Intent svc = new Intent(this, RssiForegroundService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(svc);
-        } else {
-            startService(svc);
-        }
+        // 启动前台服务(延迟一下避免阻塞启动，加保护防闪退)
+        new Handler().postDelayed(() -> {
+            try {
+                Intent svc = new Intent(MainActivity.this, RssiForegroundService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(svc);
+                } else {
+                    startService(svc);
+                }
+            } catch (Exception e) {
+                Log.e("RssiTrigger", "Failed to start service", e);
+            }
+        }, 500);
     }
 
     @Override
