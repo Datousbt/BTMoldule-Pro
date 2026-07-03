@@ -30,7 +30,7 @@ public class RssiTriggerEngine {
 
     private enum State { IDLE, ABOVE, BELOW }
 
-    final Config config;
+    public Config config;
 
     private final Map<Integer, State> stateMap = new ConcurrentHashMap<>();
     private final Map<Integer, Long> lastTriggerMap = new ConcurrentHashMap<>();

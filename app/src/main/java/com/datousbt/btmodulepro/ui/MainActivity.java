@@ -18,6 +18,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.datousbt.btmodulepro.R;
 import com.datousbt.btmodulepro.model.Config;
 import com.datousbt.btmodulepro.model.TriggerRule;
+import com.datousbt.btmodulepro.service.RssiForegroundService;
 import com.datousbt.btmodulepro.storage.ConfigManager;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
@@ -77,6 +78,9 @@ public class MainActivity extends AppCompatActivity {
 
         addBtn.setOnClickListener(v ->
                 startActivityForResult(new Intent(this, RuleEditActivity.class), REQUEST_EDIT));
+
+        // 启动前台服务
+        startService(new Intent(this, RssiForegroundService.class));
     }
 
     @Override
