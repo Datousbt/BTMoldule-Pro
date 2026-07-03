@@ -136,28 +136,32 @@ public class RuleEditActivity extends AppCompatActivity {
             Toast.makeText(this, "请先开启蓝牙", Toast.LENGTH_SHORT).show(); return;
         }
 
-        // Android 12+ 需要 BLUETOOTH_SCAN，某些设备还需 BLUETOOTH_CONNECT
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            boolean hasScan = ContextCompat.checkSelfPermission(this,
-                    Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
-            boolean hasConnect = ContextCompat.checkSelfPermission(this,
-                    Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
-            if (!hasScan || !hasConnect) {
-                requestPermissions(new String[]{
-                        Manifest.permission.BLUETOOTH_SCAN,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                }, 2);
-                return;
-            }
-        } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+        // HyperOS 3.0 把蓝牙扫描绑在定位权限下，同时请求定位+蓝牙扫描
+        java.util.List<String> needPerms = new java.util.ArrayList<>();
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+                != PackageManager.PERMISSION_GRANTED) {
+            needPerms.add(Manifest.permission.BLUETOOTH_SCAN);
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            needPerms.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        // 关键：HyperOS 需要精确定位权限才能扫描蓝牙
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            needPerms.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
                     != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                }, 2);
-                return;
+                needPerms.add(Manifest.permission.ACCESS_COARSE_LOCATION);
             }
+        }
+
+        if (!needPerms.isEmpty()) {
+            requestPermissions(needPerms.toArray(new String[0]), 2);
+            return;
         }
         startScan();
     }
