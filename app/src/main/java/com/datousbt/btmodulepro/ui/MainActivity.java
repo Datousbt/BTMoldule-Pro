@@ -84,12 +84,22 @@ public class MainActivity extends AppCompatActivity {
         addBtn.setOnClickListener(v ->
                 startActivityForResult(new Intent(this, RuleEditActivity.class), REQUEST_EDIT));
 
-        // 启动前台服务 (Android 13+ 需先请求通知权限)
+        // Android 13+: 前台服务需要运行时权限 (通知 + 蓝牙)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            java.util.List<String> perms = new java.util.ArrayList<>();
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.POST_NOTIFICATIONS);
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.BLUETOOTH_CONNECT);
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+                    != PackageManager.PERMISSION_GRANTED)
+                perms.add(Manifest.permission.BLUETOOTH_SCAN);
+
+            if (!perms.isEmpty()) {
+                ActivityCompat.requestPermissions(this, perms.toArray(new String[0]), 100);
+                return; // 等权限回调再启动
             }
         }
         startRssiService();
