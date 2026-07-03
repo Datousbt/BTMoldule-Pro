@@ -31,6 +31,9 @@ public class LogManager {
             LogManager.logPath = path;
         }
         LogManager.maxSizeBytes = maxSizeKb * 1024L;
+        Log.i(TAG, "日志已配置: enabled=" + enabled + ", path=" + logPath + ", maxSizeKB=" + maxSizeKb);
+        // 立即写一条初始化日志确认文件可写
+        write("I", TAG, "=== LogManager initialized, enabled=" + enabled + " ===");
     }
 
     public static void i(String tag, String msg) {

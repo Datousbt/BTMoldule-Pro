@@ -13,6 +13,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import com.datousbt.btmodulepro.util.LogManager;
 
+import java.io.File;
 import java.io.FileWriter;
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -52,6 +53,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static volatile HandlerThread pollThread;
     private static volatile Handler pollHandler;
     private static final AtomicBoolean pollRunning = new AtomicBoolean(false);
+    private static long lastConfigModified = 0;
     private static final String configPath = "/data/data/com.datousbt.btmodulepro/files/rssi_config.json";
     private static final String statusPath = "/data/data/com.datousbt.btmodulepro/files/rssi_status.json";
 
@@ -60,12 +62,16 @@ public class MainHook implements IXposedHookLoadPackage {
         String pkg = lpparam.packageName;
 
         if ("android".equals(pkg)) {
-            Log.i(TAG, "=== system_server loaded ===");
+            Log.i(TAG, "========================================");
+            Log.i(TAG, "=== system_server loaded, pkg=" + pkg + " ===");
+            Log.i(TAG, "========================================");
             loadConfig();
             hookPackage(lpparam.classLoader, SYSTEM_SERVER_TARGETS);
 
         } else if ("com.android.bluetooth".equals(pkg)) {
-            Log.i(TAG, "=== bluetooth app loaded ===");
+            Log.i(TAG, "========================================");
+            Log.i(TAG, "=== bluetooth app loaded, pkg=" + pkg + " ===");
+            Log.i(TAG, "========================================");
             hookPackage(lpparam.classLoader, BLUETOOTH_APP_TARGETS);
 
             int mode = engine != null ? engine.config.rssiMode : MODE_MIXED;
@@ -224,6 +230,9 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void processRssi(BluetoothDevice device, int rssi) {
         try {
+            // 热加载：检查配置文件是否被修改，是则重新加载
+            checkConfigReload();
+
             String mac = device.getAddress();
             String name = device.getName();
             if (name != null) nameCache.put(mac, name);
@@ -237,6 +246,22 @@ public class MainHook implements IXposedHookLoadPackage {
 
             if (engine != null) engine.evaluate(mac, name != null ? name : "", rssi);
         } catch (Throwable t) { LogManager.e(TAG, "processRssi error", t); }
+    }
+
+    // 每 5 秒最多检查一次配置文件修改
+    private static long lastConfigCheck = 0;
+    private void checkConfigReload() {
+        long now = System.currentTimeMillis();
+        if (now - lastConfigCheck < 5000) return;
+        lastConfigCheck = now;
+        try {
+            java.io.File f = new java.io.File(configPath);
+            if (f.exists() && f.lastModified() > lastConfigModified) {
+                lastConfigModified = f.lastModified();
+                Log.i(TAG, "Config modified, reloading...");
+                loadConfig();
+            }
+        } catch (Throwable ignored) {}
     }
 
     private void writeRssiStatus() {
@@ -269,7 +294,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static void loadConfig() {
         try {
             engine = RssiTriggerEngine.loadFromPath(configPath);
+            LogManager.i(TAG, "Config loaded: mode=" + engine.config.rssiMode +
+                    ", log=" + engine.config.logEnabled +
+                    ", rules=" + engine.config.rules.size());
         } catch (Throwable t) {
+            Log.e(TAG, "RssiTrigger loadConfig error", t);
             LogManager.e(TAG, "loadConfig error", t);
             engine = new RssiTriggerEngine();
         }

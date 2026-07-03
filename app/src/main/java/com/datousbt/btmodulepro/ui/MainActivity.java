@@ -57,6 +57,7 @@ public class MainActivity extends AppCompatActivity {
         empty = findViewById(R.id.empty);
         rssiPanel = findViewById(R.id.rssi_panel);
         rssiStatusText = findViewById(R.id.rssi_status_text);
+        rssiPanel.setVisibility(View.VISIBLE);
         FloatingActionButton addBtn = findViewById(R.id.add);
 
         recycler.setLayoutManager(new LinearLayoutManager(this));
@@ -118,64 +119,58 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshRssiPanel() {
         try {
+            // 先显示规则列表中的设备（即使还没 RSSI 数据）
+            java.util.Map<String, String> rssiMap = new java.util.LinkedHashMap<>();
+            long now = System.currentTimeMillis();
+
             File f = new File("/data/data/com.datousbt.btmodulepro/files/rssi_status.json");
-            if (!f.exists()) {
-                rssiStatusText.setText("等待信号数据 ...");
-                return;
+            if (f.exists()) {
+                // 读取 hook 写的 RSSI 状态文件
+                StringBuilder sb = new StringBuilder();
+                FileReader fr = new FileReader(f);
+                char[] buf = new char[2048]; int n;
+                while ((n = fr.read(buf)) != -1) sb.append(buf, 0, n);
+                fr.close();
+
+                org.json.JSONObject root = new org.json.JSONObject(sb.toString());
+                org.json.JSONObject devs = root.getJSONObject("devices");
+                java.util.Iterator<String> keys = devs.keys();
+                while (keys.hasNext()) {
+                    String mac = keys.next();
+                    org.json.JSONObject d = devs.getJSONObject(mac);
+                    String devName = d.optString("name", "");
+                    int rssi = d.getInt("rssi");
+                    long t = d.getLong("time");
+                    boolean stale = (now - t) > 15000;
+                    rssiMap.put(mac, (stale ? "STALE|" : "LIVE|") + devName + "|" + rssi);
+                }
             }
 
-            // 读取 RSSI 状态文件 (由 hook 进程写入)
-            StringBuilder sb = new StringBuilder();
-            FileReader fr = new FileReader(f);
-            char[] buf = new char[1024];
-            int n;
-            while ((n = fr.read(buf)) != -1) sb.append(buf, 0, n);
-            fr.close();
-
-            JSONObject root = new JSONObject(sb.toString());
-            JSONObject devices = root.getJSONObject("devices");
-
-            // 只显示在规则列表中配置了 MAC 的设备
             StringBuilder display = new StringBuilder();
-            boolean anyOnline = false;
-
             for (TriggerRule rule : config.rules) {
                 if (!rule.enable) continue;
                 String mac = rule.mac;
-                long now = System.currentTimeMillis();
-
-                if (devices.has(mac)) {
-                    JSONObject d = devices.getJSONObject(mac);
-                    int rssi = d.getInt("rssi");
-                    long time = d.getLong("time");
-                    boolean stale = (now - time) > 15000; // 超过15秒认为离线
-
-                    if (!stale) {
-                        anyOnline = true;
-                        String name = d.optString("name", rule.name);
-                        display.append("● ").append(name).append("\n")
-                               .append("  ").append(mac).append("\n")
-                               .append("  RSSI: ").append(rssi).append(" dBm  ")
-                               .append(signalBar(rssi)).append("\n\n");
-                    } else {
-                        display.append("○ ").append(rule.name).append("  [不在线]\n")
-                               .append("  ").append(mac).append("\n\n");
-                    }
+                String info = rssiMap.get(mac);
+                if (info != null && info.startsWith("LIVE|")) {
+                    String[] parts = info.split("\\|");
+                    String name = parts[1];
+                    int rssi = Integer.parseInt(parts[2]);
+                    display.append("● ").append(name).append("\n")
+                           .append("  ").append(mac).append("\n")
+                           .append("  RSSI: ").append(rssi).append(" dBm  ")
+                           .append(signalBar(rssi)).append("\n\n");
                 } else {
                     display.append("○ ").append(rule.name).append("  [不在线]\n")
                            .append("  ").append(mac).append("\n\n");
                 }
             }
-
             if (display.length() == 0) {
-                rssiStatusText.setText("暂无已启用的设备规则");
+                rssiStatusText.setText("暂无已启用的设备规则\n添加规则后可在此查看蓝牙信号状态");
             } else {
                 rssiStatusText.setText(display.toString().trim());
             }
-            rssiPanel.setVisibility(View.VISIBLE);
-
         } catch (Throwable e) {
-            rssiStatusText.setText("RSSI数据读取中 ...");
+            rssiStatusText.setText("RSSI 数据读取中 ...");
         }
     }
 

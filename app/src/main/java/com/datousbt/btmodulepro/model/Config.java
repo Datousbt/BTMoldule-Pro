@@ -35,8 +35,8 @@ public class Config {
 
     // --- 日志设置 ---
 
-    /** 日志开关 */
-    public boolean logEnabled = false;
+    /** 日志开关，默认开启方便调试 */
+    public boolean logEnabled = true;
 
     /** 日志存放路径 */
     public String logPath = "/data/data/com.datousbt.btmodulepro/files/btmodulepro.log";
