@@ -132,20 +132,29 @@ public class RuleEditActivity extends AppCompatActivity {
 
     private void doScanNearby() {
         if (btAdapter == null || !btAdapter.isEnabled()) {
-            Toast.makeText(this, "蓝牙未开启", Toast.LENGTH_SHORT).show(); return;
+            Toast.makeText(this, "请先开启蓝牙", Toast.LENGTH_SHORT).show(); return;
         }
 
-        // Android 12+ 需要 BLUETOOTH_SCAN，低版本需要位置权限
+        // Android 12+ 需要 BLUETOOTH_SCAN，某些设备还需 BLUETOOTH_CONNECT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
-                    != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{Manifest.permission.BLUETOOTH_SCAN}, 2);
+            boolean hasScan = ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
+            boolean hasConnect = ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+            if (!hasScan || !hasConnect) {
+                requestPermissions(new String[]{
+                        Manifest.permission.BLUETOOTH_SCAN,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                }, 2);
                 return;
             }
         } else {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                     != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 2);
+                requestPermissions(new String[]{
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                }, 2);
                 return;
             }
         }
@@ -158,13 +167,18 @@ public class RuleEditActivity extends AppCompatActivity {
         // 显示扫描中对话框
         scanDialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.scanning)
-                .setMessage("正在扫描附近的蓝牙设备 ...")
+                .setMessage("正在扫描附近蓝牙设备 (最长15秒) ...")
                 .setPositiveButton(R.string.cancel, (d, w) -> stopScan())
                 .setCancelable(false)
                 .create();
         scanDialog.show();
 
-        // 注册广播接收器
+        // 15秒超时自动停止
+        new android.os.Handler().postDelayed(() -> {
+            if (scanning) stopScan();
+        }, 15000);
+
+        // 注册广播接收
         IntentFilter filter = new IntentFilter();
         filter.addAction(BluetoothDevice.ACTION_FOUND);
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
@@ -172,10 +186,14 @@ public class RuleEditActivity extends AppCompatActivity {
 
         scanning = true;
         try {
-            btAdapter.startDiscovery();
+            boolean ok = btAdapter.startDiscovery();
+            if (!ok) {
+                stopScan();
+                Toast.makeText(this, "无法启动扫描，可能蓝牙正忙", Toast.LENGTH_SHORT).show();
+            }
         } catch (SecurityException e) {
             stopScan();
-            Toast.makeText(this, "扫描权限不足", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "扫描权限不足，请在系统设置中授权", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -243,11 +261,15 @@ public class RuleEditActivity extends AppCompatActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        boolean allGranted = grantResults.length > 0;
+        for (int r : grantResults) {
+            if (r != PackageManager.PERMISSION_GRANTED) allGranted = false;
+        }
+        if (allGranted) {
             if (requestCode == 1) showPaired();
             else if (requestCode == 2) startScan();
         } else {
-            Toast.makeText(this, R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "需要蓝牙权限才能使用此功能", Toast.LENGTH_LONG).show();
         }
     }
 
