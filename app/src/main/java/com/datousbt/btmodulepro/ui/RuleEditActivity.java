@@ -3,6 +3,10 @@ package com.datousbt.btmodulepro.ui;
 import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -37,15 +41,16 @@ public class RuleEditActivity extends AppCompatActivity {
     private TextInputEditText aboveCommandInput, belowCommandInput;
     private SwitchMaterial enableSwitch;
     private Button saveBtn, deleteBtn;
-    private MaterialButton importPairedBtn;
+    private MaterialButton importPairedBtn, scanNearbyBtn;
 
     private int editPosition = -1;
     private Config config;
 
-    private final ActivityResultLauncher<String> reqBtPerm =
-            registerForActivityResult(new ActivityResultContracts.RequestPermission(),
-                    granted -> { if (granted) showPaired(); else Toast.makeText(this,
-                            R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show(); });
+    // 蓝牙扫描相关
+    private BluetoothAdapter btAdapter;
+    private final List<BluetoothDevice> scannedDevices = new ArrayList<>();
+    private AlertDialog scanDialog;
+    private boolean scanning = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -66,6 +71,9 @@ public class RuleEditActivity extends AppCompatActivity {
         saveBtn = findViewById(R.id.save);
         deleteBtn = findViewById(R.id.delete);
         importPairedBtn = findViewById(R.id.import_paired);
+        scanNearbyBtn = findViewById(R.id.scan_nearby);
+
+        btAdapter = BluetoothAdapter.getDefaultAdapter();
 
         config = ConfigManager.load(this);
         editPosition = getIntent().getIntExtra("position", -1);
@@ -84,40 +92,166 @@ public class RuleEditActivity extends AppCompatActivity {
         }
 
         saveBtn.setOnClickListener(v -> save());
-        importPairedBtn.setOnClickListener(v -> {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                    && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
-                    != PackageManager.PERMISSION_GRANTED) {
-                reqBtPerm.launch(Manifest.permission.BLUETOOTH_CONNECT);
-            } else showPaired();
-        });
+        importPairedBtn.setOnClickListener(v -> doImportPaired());
+        scanNearbyBtn.setOnClickListener(v -> doScanNearby());
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopScan();
+    }
+
+    // ==================== 导入已配对设备 ====================
+
+    private void doImportPaired() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, 1);
+            return;
+        }
+        showPaired();
     }
 
     private void showPaired() {
-        BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
-        if (a == null || !a.isEnabled()) { Toast.makeText(this, "蓝牙未开启", Toast.LENGTH_SHORT).show(); return; }
+        if (btAdapter == null || !btAdapter.isEnabled()) {
+            Toast.makeText(this, "蓝牙未开启", Toast.LENGTH_SHORT).show(); return;
+        }
         Set<BluetoothDevice> bonded;
-        try { bonded = a.getBondedDevices(); } catch (SecurityException e) {
+        try { bonded = btAdapter.getBondedDevices(); } catch (SecurityException e) {
             Toast.makeText(this, R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show(); return;
         }
         if (bonded == null || bonded.isEmpty()) {
             Toast.makeText(this, R.string.no_paired_devices, Toast.LENGTH_SHORT).show(); return;
         }
-        List<BluetoothDevice> list = new ArrayList<>(bonded);
-        String[] items = new String[list.size()];
-        for (int i = 0; i < list.size(); i++) {
-            BluetoothDevice d = list.get(i);
-            String n = d.getName();
-            items[i] = (n != null && !n.isEmpty() ? n : "???") + "\n" + d.getAddress();
+        showDeviceDialog(new ArrayList<>(bonded), R.string.select_paired_device);
+    }
+
+    // ==================== 扫描附近设备 ====================
+
+    private void doScanNearby() {
+        if (btAdapter == null || !btAdapter.isEnabled()) {
+            Toast.makeText(this, "蓝牙未开启", Toast.LENGTH_SHORT).show(); return;
         }
-        new AlertDialog.Builder(this).setTitle(R.string.select_paired_device)
+
+        // Android 12+ 需要 BLUETOOTH_SCAN，低版本需要位置权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+                    != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.BLUETOOTH_SCAN}, 2);
+                return;
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 2);
+                return;
+            }
+        }
+        startScan();
+    }
+
+    private void startScan() {
+        scannedDevices.clear();
+
+        // 显示扫描中对话框
+        scanDialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.scanning)
+                .setMessage("正在扫描附近的蓝牙设备 ...")
+                .setPositiveButton(R.string.cancel, (d, w) -> stopScan())
+                .setCancelable(false)
+                .create();
+        scanDialog.show();
+
+        // 注册广播接收器
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_FOUND);
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+        registerReceiver(scanReceiver, filter);
+
+        scanning = true;
+        try {
+            btAdapter.startDiscovery();
+        } catch (SecurityException e) {
+            stopScan();
+            Toast.makeText(this, "扫描权限不足", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void stopScan() {
+        if (!scanning) return;
+        scanning = false;
+        try {
+            btAdapter.cancelDiscovery();
+        } catch (SecurityException ignored) {}
+        try {
+            unregisterReceiver(scanReceiver);
+        } catch (IllegalArgumentException ignored) {}
+        if (scanDialog != null && scanDialog.isShowing()) {
+            scanDialog.dismiss();
+        }
+
+        // 显示扫描结果
+        if (!scannedDevices.isEmpty()) {
+            showDeviceDialog(new ArrayList<>(scannedDevices), R.string.select_scanned_device);
+        } else {
+            Toast.makeText(this, R.string.no_devices_found, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private final BroadcastReceiver scanReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                if (device != null && !scannedDevices.contains(device)) {
+                    scannedDevices.add(device);
+                    // 更新对话框消息显示已发现数量
+                    if (scanDialog != null && scanDialog.isShowing()) {
+                        scanDialog.setMessage("已发现 " + scannedDevices.size() + " 个设备 ...");
+                    }
+                }
+            } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
+                stopScan();
+            }
+        }
+    };
+
+    // ==================== 设备选择对话框 ====================
+
+    private void showDeviceDialog(List<BluetoothDevice> devices, int titleRes) {
+        String[] items = new String[devices.size()];
+        for (int i = 0; i < devices.size(); i++) {
+            BluetoothDevice d = devices.get(i);
+            String n = d.getName();
+            items[i] = (n != null && !n.isEmpty() ? n : "未命名设备") + "\n" + d.getAddress();
+        }
+        new AlertDialog.Builder(this).setTitle(titleRes)
                 .setItems(items, (d, w) -> {
-                    BluetoothDevice sel = list.get(w);
+                    BluetoothDevice sel = devices.get(w);
                     String n = sel.getName();
                     if (n != null && !n.isEmpty()) { nameInput.setText(n); deviceNameInput.setText(n); }
                     macInput.setText(sel.getAddress());
-                }).setNegativeButton(R.string.cancel, null).show();
+                })
+                .setNegativeButton(R.string.cancel, null).show();
     }
+
+    // ==================== 权限回调 ====================
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (requestCode == 1) showPaired();
+            else if (requestCode == 2) startScan();
+        } else {
+            Toast.makeText(this, R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ==================== 保存/删除 ====================
 
     private void save() {
         String name = getText(nameInput), mac = getText(macInput);
@@ -146,7 +280,7 @@ public class RuleEditActivity extends AppCompatActivity {
 
     private void confirmDelete() {
         new AlertDialog.Builder(this).setTitle(R.string.delete).setMessage(R.string.confirm_delete)
-                .setPositiveButton(R.string.delete, (d, w) -> { doDelete(); })
+                .setPositiveButton(R.string.delete, (d, w) -> doDelete())
                 .setNegativeButton(R.string.cancel, null).show();
     }
 

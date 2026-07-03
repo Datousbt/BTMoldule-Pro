@@ -61,13 +61,27 @@
                             android:id="@+id/mac" android:layout_width="match_parent"
                             android:layout_height="wrap_content" android:inputType="text" />
                     </com.google.android.material.textfield.TextInputLayout>
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/import_paired"
-                        style="@style/Widget.Material3.Button.TonalButton"
-                        android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:text="@string/import_paired"
-                        app:icon="@drawable/ic_bluetooth"
-                        app:cornerRadius="20dp" />
+                    <LinearLayout
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:layout_marginTop="4dp">
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/import_paired"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="0dp" android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/import_paired"
+                            app:icon="@drawable/ic_bluetooth"
+                            app:cornerRadius="20dp"
+                            android:layout_marginEnd="8dp" />
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/scan_nearby"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="0dp" android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/scan_nearby"
+                            app:icon="@drawable/ic_scan"
+                            app:cornerRadius="20dp" />
+                    </LinearLayout>
                     <com.google.android.material.textfield.TextInputLayout
                         android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:layout_marginTop="8dp" android:hint="@string/device_name_filter"
