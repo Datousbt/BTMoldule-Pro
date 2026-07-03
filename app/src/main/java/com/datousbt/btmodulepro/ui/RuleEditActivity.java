@@ -30,13 +30,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-public class RuleEditActivity
-        extends AppCompatActivity {
+public class RuleEditActivity extends AppCompatActivity {
 
     private TextInputEditText nameInput, deviceNameInput, macInput;
     private TextInputLayout nameLayout, macLayout;
-    private TextInputEditText aboveThresholdInput, belowThresholdInput;
-    private TextInputEditText hysteresisInput, debounceInput;
     private TextInputEditText aboveCommandInput, belowCommandInput;
     private SwitchMaterial enableSwitch;
     private Button saveBtn, deleteBtn;
@@ -45,15 +42,10 @@ public class RuleEditActivity
     private int editPosition = -1;
     private Config config;
 
-    private final ActivityResultLauncher<String> requestBluetoothPermission =
-            registerForActivityResult(
-                    new ActivityResultContracts.RequestPermission(),
-                    granted -> {
-                        if (granted) showPairedDevicesDialog();
-                        else Toast.makeText(this,
-                                R.string.bluetooth_permission_required,
-                                Toast.LENGTH_SHORT).show();
-                    });
+    private final ActivityResultLauncher<String> reqBtPerm =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(),
+                    granted -> { if (granted) showPaired(); else Toast.makeText(this,
+                            R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show(); });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,10 +60,6 @@ public class RuleEditActivity
         deviceNameInput = findViewById(R.id.device_name_filter);
         macInput = findViewById(R.id.mac);
         macLayout = findViewById(R.id.mac_layout);
-        aboveThresholdInput = findViewById(R.id.above_threshold);
-        belowThresholdInput = findViewById(R.id.below_threshold);
-        hysteresisInput = findViewById(R.id.hysteresis);
-        debounceInput = findViewById(R.id.debounce);
         aboveCommandInput = findViewById(R.id.above_command);
         belowCommandInput = findViewById(R.id.below_command);
         enableSwitch = findViewById(R.id.enable_switch);
@@ -88,10 +76,6 @@ public class RuleEditActivity
             nameInput.setText(rule.name);
             deviceNameInput.setText(rule.deviceName);
             macInput.setText(rule.mac);
-            aboveThresholdInput.setText(String.valueOf(rule.aboveThreshold));
-            belowThresholdInput.setText(String.valueOf(rule.belowThreshold));
-            hysteresisInput.setText(String.valueOf(rule.hysteresis));
-            debounceInput.setText(String.valueOf(rule.debounce));
             aboveCommandInput.setText(rule.aboveCommand);
             belowCommandInput.setText(rule.belowCommand);
             enableSwitch.setChecked(rule.enable);
@@ -100,79 +84,57 @@ public class RuleEditActivity
         }
 
         saveBtn.setOnClickListener(v -> save());
-        importPairedBtn.setOnClickListener(v -> onImportPairedClick());
-    }
-
-    // --- 导入 ---
-
-    private void onImportPairedClick() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+        importPairedBtn.setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
                     != PackageManager.PERMISSION_GRANTED) {
-                requestBluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT);
-                return;
-            }
-        }
-        showPairedDevicesDialog();
+                reqBtPerm.launch(Manifest.permission.BLUETOOTH_CONNECT);
+            } else showPaired();
+        });
     }
 
-    private void showPairedDevicesDialog() {
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter == null || !adapter.isEnabled()) {
-            Toast.makeText(this, "蓝牙未开启或不可用", Toast.LENGTH_SHORT).show();
-            return;
-        }
+    private void showPaired() {
+        BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
+        if (a == null || !a.isEnabled()) { Toast.makeText(this, "蓝牙未开启", Toast.LENGTH_SHORT).show(); return; }
         Set<BluetoothDevice> bonded;
-        try { bonded = adapter.getBondedDevices(); }
-        catch (SecurityException e) {
-            Toast.makeText(this, R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show();
-            return;
+        try { bonded = a.getBondedDevices(); } catch (SecurityException e) {
+            Toast.makeText(this, R.string.bluetooth_permission_required, Toast.LENGTH_SHORT).show(); return;
         }
         if (bonded == null || bonded.isEmpty()) {
-            Toast.makeText(this, R.string.no_paired_devices, Toast.LENGTH_SHORT).show();
-            return;
+            Toast.makeText(this, R.string.no_paired_devices, Toast.LENGTH_SHORT).show(); return;
         }
-        List<BluetoothDevice> deviceList = new ArrayList<>(bonded);
-        String[] items = new String[deviceList.size()];
-        for (int i = 0; i < deviceList.size(); i++) {
-            BluetoothDevice dev = deviceList.get(i);
-            String n = dev.getName();
-            items[i] = (n != null && !n.isEmpty() ? n : getString(R.string.untitled_rule)) + "\n" + dev.getAddress();
+        List<BluetoothDevice> list = new ArrayList<>(bonded);
+        String[] items = new String[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            BluetoothDevice d = list.get(i);
+            String n = d.getName();
+            items[i] = (n != null && !n.isEmpty() ? n : "???") + "\n" + d.getAddress();
         }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.select_paired_device)
-                .setItems(items, (dialog, which) -> {
-                    BluetoothDevice selected = deviceList.get(which);
-                    String n = selected.getName();
+        new AlertDialog.Builder(this).setTitle(R.string.select_paired_device)
+                .setItems(items, (d, w) -> {
+                    BluetoothDevice sel = list.get(w);
+                    String n = sel.getName();
                     if (n != null && !n.isEmpty()) { nameInput.setText(n); deviceNameInput.setText(n); }
-                    macInput.setText(selected.getAddress());
-                })
-                .setNegativeButton(R.string.cancel, null).show();
+                    macInput.setText(sel.getAddress());
+                }).setNegativeButton(R.string.cancel, null).show();
     }
 
-    // --- 保存 ---
-
     private void save() {
-        String name = getText(nameInput);
-        String mac = getText(macInput);
-        boolean valid = true;
-        if (name.isEmpty()) { nameLayout.setError(getString(R.string.name_required)); valid = false; }
+        String name = getText(nameInput), mac = getText(macInput);
+        boolean ok = true;
+        if (name.isEmpty()) { nameLayout.setError(getString(R.string.name_required)); ok = false; }
         else nameLayout.setError(null);
-        if (mac.isEmpty()) { macLayout.setError(getString(R.string.mac_required)); valid = false; }
+        if (mac.isEmpty()) { macLayout.setError(getString(R.string.mac_required)); ok = false; }
         else macLayout.setError(null);
-        if (!valid) return;
+        if (!ok) return;
 
         TriggerRule rule;
-        if (editPosition >= 0) { rule = config.rules.get(editPosition); }
+        if (editPosition >= 0) rule = config.rules.get(editPosition);
         else { rule = new TriggerRule(); config.rules.add(rule); }
 
         rule.name = name;
         rule.mac = mac;
         rule.deviceName = getText(deviceNameInput);
-        rule.aboveThreshold = parseInt(aboveThresholdInput, -60);
-        rule.belowThreshold = parseInt(belowThresholdInput, -80);
-        rule.hysteresis = parseInt(hysteresisInput, 5);
-        rule.debounce = parseInt(debounceInput, 5000);
         rule.aboveCommand = getText(aboveCommandInput);
         rule.belowCommand = getText(belowCommandInput);
         rule.enable = enableSwitch.isChecked();
@@ -183,9 +145,8 @@ public class RuleEditActivity
     }
 
     private void confirmDelete() {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.delete).setMessage(R.string.confirm_delete)
-                .setPositiveButton(R.string.delete, (d, w) -> doDelete())
+        new AlertDialog.Builder(this).setTitle(R.string.delete).setMessage(R.string.confirm_delete)
+                .setPositiveButton(R.string.delete, (d, w) -> { doDelete(); })
                 .setNegativeButton(R.string.cancel, null).show();
     }
 
@@ -198,12 +159,7 @@ public class RuleEditActivity
         finish();
     }
 
-    private static String getText(TextInputEditText input) {
-        return input.getText() != null ? input.getText().toString().trim() : "";
-    }
-
-    private static int parseInt(TextInputEditText input, int def) {
-        try { return Integer.parseInt(getText(input)); }
-        catch (NumberFormatException e) { return def; }
+    private static String getText(TextInputEditText e) {
+        return e.getText() != null ? e.getText().toString().trim() : "";
     }
 }

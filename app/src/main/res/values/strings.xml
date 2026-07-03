@@ -22,19 +22,15 @@
     <string name="bluetooth_permission_required">需要蓝牙权限</string>
     <string name="command_hint">以 root 权限执行的 shell 命令，或 .sh 脚本路径</string>
 
-    <!-- 双阈值 -->
-    <string name="threshold_title">RSSI 信号阈值</string>
-    <string name="above_threshold">接近阈值 (dBm)</string>
-    <string name="above_threshold_hint">RSSI 高于此值时认为信号强，触发上方命令</string>
-    <string name="below_threshold">远离阈值 (dBm)</string>
-    <string name="below_threshold_hint">RSSI 低于此值时认为信号弱，触发下方命令</string>
-    <string name="hysteresis">回滞 (dBm)</string>
-    <string name="debounce">防抖间隔 (ms)</string>
-    <string name="above_command">信号强时执行 (接近)</string>
-    <string name="below_command">信号弱时执行 (远离)</string>
+    <!-- 阈值 + 命令 -->
+    <string name="above_command">↑ 信号强时执行 (接近)</string>
+    <string name="below_command">↓ 信号弱时执行 (远离)</string>
 
     <!-- 设置 -->
     <string name="settings">设置</string>
+    <string name="settings_saved">设置已保存，重启后生效</string>
+
+    <!-- RSSI -->
     <string name="rssi_mode">RSSI 信号获取方式</string>
     <string name="mode_passive">仅被动监听 (接收系统蓝牙回调)</string>
     <string name="mode_active">仅主动轮询 (定时读取 RSSI)</string>
@@ -42,5 +38,18 @@
     <string name="mode_hint">被动监听省电但依赖设备上报频率；主动轮询更及时但稍费电</string>
     <string name="poll_interval_label">主动轮询间隔 (毫秒)</string>
     <string name="poll_interval_range">范围: 1000 ~ 60000 ms (1秒 ~ 60秒)</string>
-    <string name="settings_saved">设置已保存，重启后生效</string>
+
+    <!-- 全局阈值 -->
+    <string name="global_threshold">全局 RSSI 阈值 (所有规则共用)</string>
+    <string name="above_threshold">接近阈值 (dBm)</string>
+    <string name="below_threshold">远离阈值 (dBm)</string>
+    <string name="hysteresis">回滞 (dBm)</string>
+    <string name="debounce">防抖间隔 (ms)</string>
+
+    <!-- 日志 -->
+    <string name="log_enable">启用文件日志</string>
+    <string name="log_hint">日志记录：hook 结果、RSSI 变化、shell 命令执行过程及错误</string>
+    <string name="log_path">日志存放路径</string>
+    <string name="log_max_size">日志文件大小限制 (KB)</string>
+    <string name="log_max_size_hint">超过限制自动轮转为 .bak 备份文件</string>
 </resources>

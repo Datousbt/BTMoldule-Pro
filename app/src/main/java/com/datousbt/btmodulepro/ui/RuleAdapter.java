@@ -15,8 +15,7 @@ import com.google.android.material.switchmaterial.SwitchMaterial;
 import java.util.ArrayList;
 import java.util.List;
 
-public class RuleAdapter
-        extends RecyclerView.Adapter<RuleAdapter.Holder> {
+public class RuleAdapter extends RecyclerView.Adapter<RuleAdapter.Holder> {
 
     public interface OnRuleListener {
         void onClick(int position);
@@ -26,73 +25,48 @@ public class RuleAdapter
     private List<TriggerRule> rules = new ArrayList<>();
     private final OnRuleListener listener;
 
-    public RuleAdapter(OnRuleListener listener) { this.listener = listener; }
+    public RuleAdapter(OnRuleListener l) { listener = l; }
 
-    public void setRules(List<TriggerRule> rules) {
-        this.rules = rules != null ? rules : new ArrayList<>();
-        notifyDataSetChanged();
+    public void setRules(List<TriggerRule> r) { rules = r != null ? r : new ArrayList<>(); notifyDataSetChanged(); }
+
+    @NonNull @Override public Holder onCreateViewHolder(@NonNull ViewGroup p, int t) {
+        return new Holder(LayoutInflater.from(p.getContext()).inflate(R.layout.item_rule, p, false));
     }
 
-    @NonNull @Override
-    public Holder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View v = LayoutInflater.from(parent.getContext())
-                .inflate(R.layout.item_rule, parent, false);
-        return new Holder(v);
-    }
-
-    @Override
-    public void onBindViewHolder(@NonNull Holder holder, int position) {
-        holder.bind(rules.get(position), position);
-    }
-
+    @Override public void onBindViewHolder(@NonNull Holder h, int pos) { h.bind(rules.get(pos), pos); }
     @Override public int getItemCount() { return rules.size(); }
 
     class Holder extends RecyclerView.ViewHolder {
-        TextView name, mac, threshold, commands;
-        SwitchMaterial enableSwitch;
+        TextView name, mac, commands;
+        SwitchMaterial sw;
 
-        Holder(@NonNull View itemView) {
-            super(itemView);
-            name = itemView.findViewById(R.id.rule_name);
-            mac = itemView.findViewById(R.id.rule_mac);
-            threshold = itemView.findViewById(R.id.rule_threshold);
-            commands = itemView.findViewById(R.id.rule_commands);
-            enableSwitch = itemView.findViewById(R.id.enable_switch);
+        Holder(@NonNull View v) {
+            super(v);
+            name = v.findViewById(R.id.rule_name);
+            mac = v.findViewById(R.id.rule_mac);
+            commands = v.findViewById(R.id.rule_commands);
+            sw = v.findViewById(R.id.enable_switch);
         }
 
-        void bind(TriggerRule rule, int position) {
-            name.setText(rule.name != null && !rule.name.isEmpty()
-                    ? rule.name : itemView.getContext().getString(R.string.untitled_rule));
+        void bind(TriggerRule rule, int pos) {
+            name.setText(rule.name != null && !rule.name.isEmpty() ? rule.name :
+                    itemView.getContext().getString(R.string.untitled_rule));
             mac.setText(rule.mac);
-
-            // 双阈值显示
-            StringBuilder th = new StringBuilder();
-            if (rule.aboveThreshold < 0) th.append("↑ ≥").append(rule.aboveThreshold).append(" dBm");
-            if (rule.belowThreshold < 0) {
-                if (th.length() > 0) th.append("  ");
-                th.append("↓ ≤").append(rule.belowThreshold).append(" dBm");
-            }
-            threshold.setText(th.toString());
-
-            // 命令摘要
             StringBuilder cs = new StringBuilder();
             if (rule.aboveCommand != null && !rule.aboveCommand.isEmpty())
-                cs.append("↑").append(ellipsis(rule.aboveCommand, 25));
+                cs.append("↑接近:").append(ellipsis(rule.aboveCommand, 20));
             if (rule.belowCommand != null && !rule.belowCommand.isEmpty()) {
-                if (cs.length() > 0) cs.append("  ");
-                cs.append("↓").append(ellipsis(rule.belowCommand, 25));
+                if (cs.length() > 0) cs.append("\n");
+                cs.append("↓远离:").append(ellipsis(rule.belowCommand, 20));
             }
             commands.setText(cs.length() > 0 ? cs.toString() : "无命令");
 
-            enableSwitch.setOnCheckedChangeListener(null);
-            enableSwitch.setChecked(rule.enable);
-            enableSwitch.setOnCheckedChangeListener((btn, checked) ->
-                    listener.onToggle(position, checked));
-            itemView.setOnClickListener(v -> listener.onClick(position));
+            sw.setOnCheckedChangeListener(null);
+            sw.setChecked(rule.enable);
+            sw.setOnCheckedChangeListener((b, c) -> listener.onToggle(pos, c));
+            itemView.setOnClickListener(v -> listener.onClick(pos));
         }
 
-        private String ellipsis(String s, int max) {
-            return s.length() > max ? s.substring(0, max) + "…" : s;
-        }
+        String ellipsis(String s, int max) { return s.length() > max ? s.substring(0, max) + "…" : s; }
     }
 }
