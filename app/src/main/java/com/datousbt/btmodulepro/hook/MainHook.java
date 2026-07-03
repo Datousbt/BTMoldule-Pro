@@ -13,7 +13,6 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import com.datousbt.btmodulepro.util.LogManager;
 
-import java.io.File;
 import java.io.FileWriter;
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -53,61 +52,100 @@ public class MainHook implements IXposedHookLoadPackage {
     private static volatile HandlerThread pollThread;
     private static volatile Handler pollHandler;
     private static final AtomicBoolean pollRunning = new AtomicBoolean(false);
-    private static long lastConfigModified = 0;
     private static final String configPath = "/data/data/com.datousbt.btmodulepro/files/rssi_config.json";
     private static final String statusPath = "/data/data/com.datousbt.btmodulepro/files/rssi_status.json";
+
+    // 配置热加载：独立线程每 3 秒检查配置文件变化
+    private static volatile long lastConfigMod = 0;
+    private static volatile HandlerThread watcherThread;
+    private static final AtomicBoolean watcherRunning = new AtomicBoolean(false);
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         String pkg = lpparam.packageName;
 
         if ("android".equals(pkg)) {
-            Log.i(TAG, "========================================");
-            Log.i(TAG, "=== system_server loaded, pkg=" + pkg + " ===");
-            Log.i(TAG, "========================================");
+            Log.i(TAG, "=== system_server ===");
             loadConfig();
-            hookPackage(lpparam.classLoader, SYSTEM_SERVER_TARGETS);
+            hookPackage(lpparam.classLoader, SYSTEM_SERVER_TARGETS, "system_server");
+            startConfigWatcher();
 
         } else if ("com.android.bluetooth".equals(pkg)) {
-            Log.i(TAG, "========================================");
-            Log.i(TAG, "=== bluetooth app loaded, pkg=" + pkg + " ===");
-            Log.i(TAG, "========================================");
-            hookPackage(lpparam.classLoader, BLUETOOTH_APP_TARGETS);
+            Log.i(TAG, "=== bluetooth app ===");
+            hookPackage(lpparam.classLoader, BLUETOOTH_APP_TARGETS, "bluetooth");
+            startConfigWatcher();
 
             int mode = engine != null ? engine.config.rssiMode : MODE_MIXED;
             int interval = engine != null ? engine.config.pollInterval : 5000;
             if (mode == MODE_ACTIVE || mode == MODE_MIXED) {
                 startPolling(interval);
             } else {
-                LogManager.i(TAG, "被动监听模式，跳过主动轮询");
+                Log.i(TAG, "Mode=PASSIVE, no active polling");
             }
         }
     }
 
-    // --- hook 安装 ---
+    // ==================== 配置热加载（不依赖 RSSI 事件） ====================
 
-    private void hookPackage(ClassLoader cl, String[] targets) {
-        for (String className : targets) {
-            if (tryHookClass(cl, className)) break;
-        }
-        LogManager.i(TAG, "Hooks done");
+    private void startConfigWatcher() {
+        if (watcherRunning.getAndSet(true)) return;
+        watcherThread = new HandlerThread("CfgWatcher");
+        watcherThread.start();
+        Handler wh = new Handler(watcherThread.getLooper());
+        Log.i(TAG, "Config watcher started (every 3s)");
+        wh.post(new Runnable() {
+            public void run() {
+                try {
+                    java.io.File f = new java.io.File(configPath);
+                    if (f.exists()) {
+                        long mod = f.lastModified();
+                        if (mod > lastConfigMod) {
+                            lastConfigMod = mod;
+                            Log.i(TAG, "Config changed, reloading...");
+                            loadConfig();
+                            // 动态调整轮询
+                            if (engine != null) {
+                                int mode = engine.config.rssiMode;
+                                int interval = engine.config.pollInterval;
+                                Log.i(TAG, "New config: mode=" + mode + ", log=" + engine.config.logEnabled +
+                                        ", above=" + engine.config.aboveThreshold +
+                                        ", below=" + engine.config.belowThreshold);
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                wh.postDelayed(this, 3000);
+            }
+        });
     }
 
-    private boolean tryHookClass(ClassLoader cl, String className) {
+    // ==================== hook 安装 ====================
+
+    private void hookPackage(ClassLoader cl, String[] targets, String where) {
+        for (String className : targets) {
+            if (tryHookClass(cl, className, where)) break;
+        }
+        Log.i(TAG, where + " hook install complete");
+    }
+
+    private boolean tryHookClass(ClassLoader cl, String className, String where) {
         try {
             Class<?> target = XposedHelpers.findClass(className, cl);
-            LogManager.i(TAG, "Hook found: " + target.getName());
-            return hookMethods(target) + hookHandlerIfPresent(target) > 0;
+            Log.i(TAG, "[" + where + "] FOUND: " + target.getName());
+            int n = hookMethods(target, where);
+            n += hookHandlerIfPresent(target, where);
+            Log.i(TAG, "[" + where + "] " + n + " hooks in " + className);
+            return n > 0;
         } catch (ClassNotFoundException e) {
-            LogManager.d(TAG, "Hook not found: " + className);
+            Log.i(TAG, "[" + where + "] NOT FOUND: " + className);
             return false;
         } catch (Throwable t) {
-            LogManager.e(TAG, "Hook error: " + className, t);
+            Log.e(TAG, "[" + where + "] ERROR: " + className + " - " + t.getMessage());
             return false;
         }
     }
 
-    private int hookMethods(Class<?> target) {
+    private int hookMethods(Class<?> target, String where) {
         int count = 0;
         for (Method m : target.getDeclaredMethods()) {
             if (matchesRssiSig(m.getParameterTypes()) || isRssiName(m.getName())) {
@@ -123,7 +161,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Throwable ignored) {}
             }
         }
-        LogManager.d(TAG, "  " + target.getSimpleName() + ": " + count + " method hooks");
         return count;
     }
 
@@ -142,7 +179,7 @@ public class MainHook implements IXposedHookLoadPackage {
         return false;
     }
 
-    private int hookHandlerIfPresent(Class<?> target) {
+    private int hookHandlerIfPresent(Class<?> target, String where) {
         int c = 0;
         for (Class<?> inner : target.getDeclaredClasses()) {
             if (Handler.class.isAssignableFrom(inner)) {
@@ -155,14 +192,14 @@ public class MainHook implements IXposedHookLoadPackage {
                                 }
                             });
                     c++;
-                    LogManager.i(TAG, "  Handler hook: " + inner.getSimpleName());
+                    Log.i(TAG, "[" + where + "] Handler: " + inner.getSimpleName());
                 } catch (Throwable ignored) {}
             }
         }
         return c;
     }
 
-    // --- 主动轮询 ---
+    // ==================== 主动轮询 ====================
 
     private void startPolling(int interval) {
         if (pollRunning.getAndSet(true)) return;
@@ -171,7 +208,7 @@ public class MainHook implements IXposedHookLoadPackage {
         pollThread.start();
         pollHandler = new Handler(pollThread.getLooper());
         final int fi = interval;
-        LogManager.i(TAG, "主动轮询启动，间隔=" + fi + "ms");
+        Log.i(TAG, "Active poll: " + fi + "ms");
         pollHandler.post(new Runnable() {
             public void run() {
                 pollRssi();
@@ -187,26 +224,40 @@ public class MainHook implements IXposedHookLoadPackage {
             if (adapter == null) return;
             java.util.List<?> devices = (java.util.List<?>) adapter.getClass()
                     .getMethod("getConnectedDevices").invoke(adapter);
-            if (devices == null) return;
+            if (devices == null || devices.isEmpty()) {
+                // 无连接设备，写空状态文件（让UI知道在线但无设备）
+                Log.d(TAG, "poll: no connected devices");
+                return;
+            }
             for (Object d : devices) {
                 if (d instanceof BluetoothDevice) {
+                    BluetoothDevice dev = (BluetoothDevice) d;
                     try {
                         Method m = BluetoothDevice.class.getMethod("readRemoteRssi");
-                        m.invoke(d);
-                    } catch (NoSuchMethodException ignored) {}
+                        boolean ok = (Boolean) m.invoke(dev);
+                        Log.d(TAG, "poll: readRemoteRssi(" + dev.getAddress() + ") → " + ok);
+                    } catch (NoSuchMethodException e) {
+                        // readRemoteRssi 不可用，直接记录当前已知 RSSI
+                        Log.d(TAG, "poll: readRemoteRssi not found, device=" + dev.getAddress());
+                    }
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            Log.d(TAG, "poll error: " + t.getMessage());
+        }
     }
 
-    // --- 回调 ---
+    // ==================== 回调 ====================
 
     private void onHandlerMsg(XC_MethodHook.MethodHookParam param) {
         try {
             Message msg = (Message) param.args[0];
             if (msg != null && msg.obj instanceof BluetoothDevice) {
                 int r = msg.arg1;
-                if (r < 0 && r >= -100) processRssi((BluetoothDevice) msg.obj, r);
+                if (r < 0 && r >= -100) {
+                    Log.d(TAG, "Handler RSSI: " + ((BluetoothDevice) msg.obj).getAddress() + " = " + r);
+                    processRssi((BluetoothDevice) msg.obj, r);
+                }
             }
         } catch (Throwable t) { LogManager.e(TAG, "Handler error", t); }
     }
@@ -222,17 +273,17 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (v < 0 && v >= -100) rssi = v;
                 }
             }
-            if (dev != null && rssi != Integer.MIN_VALUE) processRssi(dev, rssi);
+            if (dev != null && rssi != Integer.MIN_VALUE) {
+                Log.d(TAG, "Hook RSSI: " + dev.getAddress() + " = " + rssi);
+                processRssi(dev, rssi);
+            }
         } catch (Throwable t) { LogManager.e(TAG, "RSSI callback error", t); }
     }
 
-    // --- RSSI 处理 ---
+    // ==================== RSSI 处理 ====================
 
     private void processRssi(BluetoothDevice device, int rssi) {
         try {
-            // 热加载：检查配置文件是否被修改，是则重新加载
-            checkConfigReload();
-
             String mac = device.getAddress();
             String name = device.getName();
             if (name != null) nameCache.put(mac, name);
@@ -246,22 +297,6 @@ public class MainHook implements IXposedHookLoadPackage {
 
             if (engine != null) engine.evaluate(mac, name != null ? name : "", rssi);
         } catch (Throwable t) { LogManager.e(TAG, "processRssi error", t); }
-    }
-
-    // 每 5 秒最多检查一次配置文件修改
-    private static long lastConfigCheck = 0;
-    private void checkConfigReload() {
-        long now = System.currentTimeMillis();
-        if (now - lastConfigCheck < 5000) return;
-        lastConfigCheck = now;
-        try {
-            java.io.File f = new java.io.File(configPath);
-            if (f.exists() && f.lastModified() > lastConfigModified) {
-                lastConfigModified = f.lastModified();
-                Log.i(TAG, "Config modified, reloading...");
-                loadConfig();
-            }
-        } catch (Throwable ignored) {}
     }
 
     private void writeRssiStatus() {
@@ -294,12 +329,10 @@ public class MainHook implements IXposedHookLoadPackage {
     private static void loadConfig() {
         try {
             engine = RssiTriggerEngine.loadFromPath(configPath);
-            LogManager.i(TAG, "Config loaded: mode=" + engine.config.rssiMode +
-                    ", log=" + engine.config.logEnabled +
-                    ", rules=" + engine.config.rules.size());
+            Log.i(TAG, "Config: mode=" + engine.config.rssiMode +
+                    ", log=" + engine.config.logEnabled + ", rules=" + engine.config.rules.size());
         } catch (Throwable t) {
-            Log.e(TAG, "RssiTrigger loadConfig error", t);
-            LogManager.e(TAG, "loadConfig error", t);
+            Log.e(TAG, "loadConfig error", t);
             engine = new RssiTriggerEngine();
         }
     }
