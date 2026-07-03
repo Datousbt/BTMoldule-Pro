@@ -6,7 +6,6 @@ import android.os.HandlerThread;
 import android.os.Message;
 import android.util.Log;
 
-import de.robv.android.xposed.IXposedMod;
 import io.github.libxposed.api.XposedInterface.Chain;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam;
@@ -20,7 +19,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class MainHook extends XposedModule implements IXposedMod {
+public class MainHook extends XposedModule {
 
     private static final String TAG = "RssiTrigger";
     private static final int MODE_PASSIVE = 0, MODE_ACTIVE = 1, MODE_MIXED = 2;

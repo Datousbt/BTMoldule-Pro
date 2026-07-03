@@ -26,7 +26,6 @@ android {
 
 dependencies {
     implementation files('libs/api-101.0.1.jar')
-    compileOnly files('libs/ixposed-stub.jar')
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'androidx.activity:activity:1.10.1'
     implementation 'com.google.android.material:material:1.12.0'
