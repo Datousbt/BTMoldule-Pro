@@ -1,6 +1,8 @@
 package com.datousbt.btmodulepro.ui;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -13,6 +15,8 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -80,19 +84,15 @@ public class MainActivity extends AppCompatActivity {
         addBtn.setOnClickListener(v ->
                 startActivityForResult(new Intent(this, RuleEditActivity.class), REQUEST_EDIT));
 
-        // 启动前台服务(延迟一下避免阻塞启动，加保护防闪退)
-        new Handler().postDelayed(() -> {
-            try {
-                Intent svc = new Intent(MainActivity.this, RssiForegroundService.class);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(svc);
-                } else {
-                    startService(svc);
-                }
-            } catch (Exception e) {
-                Log.e("RssiTrigger", "Failed to start service", e);
+        // 启动前台服务 (Android 13+ 需先请求通知权限)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
             }
-        }, 500);
+        }
+        startRssiService();
     }
 
     @Override
@@ -196,6 +196,27 @@ public class MainActivity extends AppCompatActivity {
         if (rssi >= -70) return "███ ";
         if (rssi >= -80) return "██  ";
         return "█   ";
+    }
+
+    private void startRssiService() {
+        try {
+            Intent svc = new Intent(this, RssiForegroundService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svc);
+            } else {
+                startService(svc);
+            }
+        } catch (Exception e) {
+            Log.e("RssiTrigger", "Failed to start service", e);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] perms, @NonNull int[] results) {
+        super.onRequestPermissionsResult(requestCode, perms, results);
+        if (requestCode == 100) {
+            startRssiService();
+        }
     }
 
     @Override
