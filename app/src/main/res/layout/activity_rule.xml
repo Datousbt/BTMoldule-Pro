@@ -9,13 +9,15 @@
 
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:fitsSystemWindows="true">
+        android:fitsSystemWindows="true" android:background="@color/surface">
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar" android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize" android:background="@color/primary"
-            app:title="@string/add_rule" app:titleTextColor="@color/on_primary"
+            android:layout_height="?attr/actionBarSize"
+            app:title="@string/add_rule"
+            app:titleTextAppearance="@style/TextAppearance.Material3.TitleLarge"
+            app:titleTextColor="@color/on_surface"
             app:navigationIcon="@drawable/ic_arrow_back"
-            app:navigationIconTint="@color/on_primary" />
+            app:navigationIconTint="@color/on_surface_variant" />
     </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.core.widget.NestedScrollView
@@ -25,55 +27,78 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
             android:orientation="vertical" android:padding="16dp">
 
-            <!-- 设备信息 -->
+            <!-- Section: 设备信息 -->
+            <TextView
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="设备信息"
+                android:textAppearance="?attr/textAppearanceTitleSmall"
+                android:textColor="@color/on_surface"
+                android:layout_marginBottom="8dp" android:layout_marginTop="4dp" />
+
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp" app:cardElevation="2dp" app:cardCornerRadius="12dp">
+                android:layout_marginBottom="16dp"
+                style="@style/Widget.Material3.CardView.Outlined"
+                app:cardCornerRadius="12dp">
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:orientation="vertical" android:padding="16dp">
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/name_layout" android:layout_width="match_parent"
                         android:layout_height="wrap_content" android:layout_marginBottom="12dp"
-                        android:hint="@string/rule_name" app:startIconDrawable="@drawable/ic_label">
+                        android:hint="@string/rule_name"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/name" android:layout_width="match_parent"
-                            android:layout_height="wrap_content" android:inputType="text" android:maxLines="1" />
+                            android:layout_height="wrap_content" android:inputType="text" />
                     </com.google.android.material.textfield.TextInputLayout>
                     <com.google.android.material.textfield.TextInputLayout
                         android:id="@+id/mac_layout" android:layout_width="match_parent"
                         android:layout_height="wrap_content" android:layout_marginBottom="8dp"
-                        android:hint="@string/device_mac" app:startIconDrawable="@drawable/ic_mac"
+                        android:hint="@string/device_mac"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                         app:placeholderText="@string/mac_hint">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/mac" android:layout_width="match_parent"
-                            android:layout_height="wrap_content" android:inputType="text" android:maxLines="1" />
+                            android:layout_height="wrap_content" android:inputType="text" />
                     </com.google.android.material.textfield.TextInputLayout>
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/import_paired"
                         style="@style/Widget.Material3.Button.TonalButton"
                         android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:text="@string/import_paired" app:icon="@drawable/ic_bluetooth" />
+                        android:text="@string/import_paired"
+                        app:icon="@drawable/ic_bluetooth"
+                        app:cornerRadius="20dp" />
                     <com.google.android.material.textfield.TextInputLayout
                         android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:layout_marginTop="8dp" android:hint="@string/device_name_filter"
-                        app:startIconDrawable="@drawable/ic_filter">
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/device_name_filter" android:layout_width="match_parent"
-                            android:layout_height="wrap_content" android:inputType="text" android:maxLines="1" />
+                            android:layout_height="wrap_content" android:inputType="text" />
                     </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- 命令 -->
+            <!-- Section: 命令 -->
+            <TextView
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="触发命令"
+                android:textAppearance="?attr/textAppearanceTitleSmall"
+                android:textColor="@color/on_surface"
+                android:layout_marginBottom="8dp" />
+
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp" app:cardElevation="2dp" app:cardCornerRadius="12dp">
+                android:layout_marginBottom="16dp"
+                style="@style/Widget.Material3.CardView.Outlined"
+                app:cardCornerRadius="12dp">
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:orientation="vertical" android:padding="16dp">
                     <com.google.android.material.textfield.TextInputLayout
                         android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:layout_marginBottom="12dp" android:hint="@string/above_command"
                         app:startIconDrawable="@drawable/ic_arrow_up"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                         app:placeholderText="@string/command_hint">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/above_command" android:layout_width="match_parent"
@@ -84,6 +109,7 @@
                         android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:hint="@string/below_command"
                         app:startIconDrawable="@drawable/ic_arrow_down"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
                         app:placeholderText="@string/command_hint">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/below_command" android:layout_width="match_parent"
@@ -96,27 +122,37 @@
             <!-- 启用 -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp" app:cardElevation="2dp" app:cardCornerRadius="12dp">
+                android:layout_marginBottom="16dp"
+                style="@style/Widget.Material3.CardView.Outlined"
+                app:cardCornerRadius="12dp">
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:gravity="center_vertical" android:orientation="horizontal" android:padding="16dp">
+                    android:gravity="center_vertical" android:orientation="horizontal"
+                    android:padding="16dp">
                     <TextView android:layout_width="0dp" android:layout_height="wrap_content"
                         android:layout_weight="1" android:text="@string/enable"
-                        android:textColor="@color/on_surface" android:textSize="16sp" />
+                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textColor="@color/on_surface" />
                     <com.google.android.material.switchmaterial.SwitchMaterial
                         android:id="@+id/enable_switch" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <Button android:id="@+id/save" android:layout_width="match_parent"
-                android:layout_height="48dp" android:text="@string/save" android:textSize="16sp"
-                android:backgroundTint="@color/primary" android:textColor="@color/on_primary"
-                app:cornerRadius="8dp" />
-            <Button android:id="@+id/delete" android:layout_width="match_parent"
-                android:layout_height="48dp" android:layout_marginTop="8dp"
-                android:text="@string/delete" android:textSize="16sp"
-                android:backgroundTint="@color/error" android:textColor="@color/on_primary"
-                android:visibility="gone" app:cornerRadius="8dp" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/save" android:layout_width="match_parent"
+                android:layout_height="56dp" android:text="@string/save"
+                android:textAppearance="?attr/textAppearanceLabelLarge"
+                app:cornerRadius="28dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/delete" android:layout_width="match_parent"
+                android:layout_height="56dp" android:layout_marginTop="8dp"
+                android:text="@string/delete"
+                android:textAppearance="?attr/textAppearanceLabelLarge"
+                style="@style/Widget.Material3.Button.TonalButton"
+                app:cornerRadius="28dp" android:visibility="gone"
+                app:iconTint="@color/error"
+                android:textColor="@color/error" />
 
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
