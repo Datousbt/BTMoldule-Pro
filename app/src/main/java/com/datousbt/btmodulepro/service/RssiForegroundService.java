@@ -8,33 +8,33 @@ import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothProfile;
-import android.content.BroadcastReceiver;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.util.Log;
 
 import com.datousbt.btmodulepro.R;
 import com.datousbt.btmodulepro.hook.RssiTriggerEngine;
 import com.datousbt.btmodulepro.model.Config;
 import com.datousbt.btmodulepro.model.TriggerRule;
-import com.datousbt.btmodulepro.shell.RootExecutor;
 import com.datousbt.btmodulepro.storage.ConfigManager;
 import com.datousbt.btmodulepro.ui.MainActivity;
 import com.datousbt.btmodulepro.util.LogManager;
 
 import java.io.FileWriter;
-import java.lang.reflect.Method;
-import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public class RssiForegroundService extends Service {
 
@@ -43,13 +43,15 @@ public class RssiForegroundService extends Service {
     private static final int NOTIFY_ID = 1;
 
     private BluetoothAdapter btAdapter;
-    private BluetoothManager btManager;
+    private BluetoothLeScanner leScanner;
     private RssiTriggerEngine engine;
     private Config config;
-    private HandlerThread workerThread;
-    private Handler worker;
+    private HandlerThread worker;
+    private Handler handler;
+    private PowerManager.WakeLock wakeLock;
     private boolean running;
 
+    // BLE 扫描结果缓存
     private final Map<String, Integer> rssiCache = new LinkedHashMap<>();
     private final Map<String, Long> rssiTimeCache = new LinkedHashMap<>();
     private final Map<String, String> nameCache = new LinkedHashMap<>();
@@ -75,28 +77,19 @@ public class RssiForegroundService extends Service {
         super.onDestroy();
     }
 
-    // ==================== 启动 / 停止 ====================
+    // ==================== 启动/停止 ====================
 
+    @SuppressWarnings("deprecation")
     private void start() {
         running = true;
-        btManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
-        btAdapter = btManager.getAdapter();
-        if (btAdapter == null) {
-            Log.e(TAG, "Bluetooth not available, stopping");
-            stopSelf();
-            return;
-        }
+        btAdapter = ((BluetoothManager) getSystemService(BLUETOOTH_SERVICE)).getAdapter();
+        if (btAdapter == null) { stopSelf(); return; }
+        leScanner = btAdapter.getBluetoothLeScanner();
 
         config = ConfigManager.load(this);
         engine = new RssiTriggerEngine(config);
         LogManager.configure(config.logEnabled, config.logPath, config.logMaxSizeKb);
-        LogManager.i(TAG, "Service started. rules=" + config.rules.size() +
-                " mode=" + config.rssiMode + " poll=" + config.pollInterval + "ms");
-        Log.i(TAG, "Service started. rules=" + config.rules.size());
-
-        workerThread = new HandlerThread("RssiWorker");
-        workerThread.start();
-        worker = new Handler(workerThread.getLooper());
+        LogManager.i(TAG, "Service started. rules=" + config.rules.size());
 
         // 前台通知
         PendingIntent pi = PendingIntent.getActivity(this, 0,
@@ -104,188 +97,167 @@ public class RssiForegroundService extends Service {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("蓝牙触发器运行中")
-                .setContentText("监听蓝牙信号强度")
+                .setContentText("BLE 扫描监听信号强度")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentIntent(pi)
                 .setOngoing(true)
                 .build();
         startForeground(NOTIFY_ID, n);
 
-        // 蓝牙连接广播
-        IntentFilter f = new IntentFilter();
-        f.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
-        f.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-        registerReceiver(btReceiver, f);
+        // 后台线程
+        worker = new HandlerThread("RssiWorker");
+        worker.start();
+        handler = new Handler(worker.getLooper());
 
-        // RSSI 轮询
-        int interval = config.pollInterval > 0 ? config.pollInterval : 5000;
-        worker.postDelayed(pollRunnable, 1000); // 1秒后首次轮询
-        Log.i(TAG, "Poll interval=" + interval + "ms");
+        // 唤醒锁（防止深度休眠中断扫描）
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG + ":wakelock");
+        wakeLock.acquire(10 * 60 * 1000L); // 10分钟
+
+        // 启动 BLE 扫描
+        startBleScan();
+
+        // 定时热加载配置 + 写状态文件
+        handler.post(configReloader);
     }
 
     private void stop() {
         running = false;
-        if (worker != null) worker.removeCallbacks(pollRunnable);
-        if (workerThread != null) workerThread.quitSafely();
-        try { unregisterReceiver(btReceiver); } catch (Exception ignored) {}
+        stopBleScan();
+        if (handler != null) handler.removeCallbacks(configReloader);
+        if (worker != null) worker.quitSafely();
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         stopForeground(STOP_FOREGROUND_REMOVE);
         LogManager.i(TAG, "Service stopped");
     }
 
-    // ==================== 蓝牙广播 ====================
+    // ==================== BLE 扫描（核心） ====================
 
-    private final BroadcastReceiver btReceiver = new BroadcastReceiver() {
-        public void onReceive(Context ctx, Intent intent) {
-            BluetoothDevice dev = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-            if (dev == null) return;
-            String mac = dev.getAddress();
-            String name = dev.getName();
+    private void startBleScan() {
+        if (leScanner == null) {
+            Log.e(TAG, "BLE scanner not available");
+            return;
+        }
 
-            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(intent.getAction())) {
-                Log.i(TAG, "ACL connected: " + mac);
-                nameCache.put(mac, name != null ? name : "");
-                // 连接时立刻查 RSSI
-                queryRssi(dev);
-            } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(intent.getAction())) {
-                Log.i(TAG, "ACL disconnected: " + mac);
-                rssiCache.remove(mac);
-                rssiTimeCache.put(mac, System.currentTimeMillis());
-                // 断开视为 RSSI = -100（极弱信号）
-                if (engine != null)
-                    engine.evaluate(mac, nameCache.getOrDefault(mac, ""), -100);
-                writeStatus();
+        ScanSettings settings = new ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)  // 高频率扫描
+                .setReportDelay(0)  // 立即上报
+                .build();
+
+        // 不加 filter，扫描所有设备（根据 MAC 在回调里过滤）
+        List<ScanFilter> filters = new ArrayList<>();
+        // 可选：为每个规则的目标设备加 MAC 过滤，减少无关回调
+        for (TriggerRule rule : config.rules) {
+            if (rule.enable && rule.mac != null && !rule.mac.isEmpty()) {
+                try {
+                    filters.add(new ScanFilter.Builder()
+                            .setDeviceAddress(rule.mac)
+                            .build());
+                } catch (Exception ignored) {}
             }
+        }
+        if (filters.isEmpty()) filters = null;
+
+        LogManager.i(TAG, "Starting BLE scan, filters=" + (filters != null ? filters.size() : 0));
+        Log.i(TAG, "BLE scan started");
+
+        try {
+            leScanner.startScan(filters, settings, scanCallback);
+        } catch (SecurityException e) {
+            Log.e(TAG, "Missing BLE scan permission", e);
+        }
+    }
+
+    private void stopBleScan() {
+        if (leScanner != null) {
+            try { leScanner.stopScan(scanCallback); } catch (Exception ignored) {}
+        }
+        Log.i(TAG, "BLE scan stopped");
+    }
+
+    private final ScanCallback scanCallback = new ScanCallback() {
+        @Override
+        public void onScanResult(int callbackType, ScanResult result) {
+            BluetoothDevice device = result.getDevice();
+            int rssi = result.getRssi();
+            if (device == null) return;
+
+            String mac = device.getAddress();
+            String name = device.getName();
+
+            if (name != null) nameCache.put(mac, name);
+
+            Integer old = rssiCache.put(mac, rssi);
+            rssiTimeCache.put(mac, System.currentTimeMillis());
+            if (old != null && old == rssi) return;
+
+            LogManager.d(TAG, "RSSI: " + mac + " = " + rssi);
+
+            // 触发规则
+            if (engine != null) engine.evaluate(mac, name != null ? name : "", rssi);
+
+            // 写状态文件（每 1.5 秒最多一次，减少 IO）
+            writeStatusThrottled();
+        }
+
+        @Override
+        public void onScanFailed(int errorCode) {
+            Log.e(TAG, "BLE scan failed: " + errorCode);
+            // 1 秒后重试
+            handler.postDelayed(() -> {
+                if (running) startBleScan();
+            }, 1000);
         }
     };
 
-    // ==================== RSSI 轮询 ====================
+    // ==================== 配置热加载 ====================
 
-    private final Runnable pollRunnable = new Runnable() {
+    private final Runnable configReloader = new Runnable() {
         public void run() {
-            if (!running || !btAdapter.isEnabled()) {
-                worker.postDelayed(this, 5000);
-                return;
-            }
+            if (!running) return;
 
-            // 热加载配置
             Config newCfg = ConfigManager.load(RssiForegroundService.this);
-            if (config.rules.size() != newCfg.rules.size() ||
-                    config.rssiMode != newCfg.rssiMode ||
-                    config.logEnabled != newCfg.logEnabled) {
+            if (config.logEnabled != newCfg.logEnabled ||
+                    config.rules.size() != newCfg.rules.size() ||
+                    config.rssiMode != newCfg.rssiMode) {
                 LogManager.configure(newCfg.logEnabled, newCfg.logPath, newCfg.logMaxSizeKb);
-                LogManager.i(TAG, "Config reloaded");
+                // 规则变了，重启扫描以更新 filter
+                if (rulesChanged(config, newCfg)) {
+                    stopBleScan();
+                    startBleScan();
+                }
             }
             config = newCfg;
             engine.config = config;
 
-            // 获取已连接设备并查询 RSSI
-            pollConnectedDevices();
+            // 续期唤醒锁
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire(10 * 60 * 1000L);
+            }
 
-            int interval = config.pollInterval > 0 ? config.pollInterval : 5000;
-            worker.postDelayed(this, interval);
+            handler.postDelayed(this, 5000);
         }
     };
 
-    private void pollConnectedDevices() {
-        Set<BluetoothDevice> devices = new HashSet<>();
-
-        // API 31+: 公开 API 获取已连接设备
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try { devices.addAll(btManager.getConnectedDevices(BluetoothProfile.GATT)); }
-            catch (SecurityException ignored) {}
-            try { devices.addAll(btManager.getConnectedDevices(BluetoothProfile.A2DP)); }
-            catch (SecurityException ignored) {}
-            try { devices.addAll(btManager.getConnectedDevices(BluetoothProfile.HEADSET)); }
-            catch (SecurityException ignored) {}
+    private boolean rulesChanged(Config old, Config nw) {
+        if (old.rules.size() != nw.rules.size()) return true;
+        for (int i = 0; i < old.rules.size(); i++) {
+            TriggerRule a = old.rules.get(i), b = nw.rules.get(i);
+            if (!a.mac.equals(b.mac) || a.enable != b.enable) return true;
         }
+        return false;
+    }
 
-        // 备用: 检查所有已配对设备中哪些是连接的
-        try {
-            for (BluetoothDevice d : btAdapter.getBondedDevices()) {
-                if (btAdapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothAdapter.STATE_CONNECTED
-                        && d.getAddress().equals(getActiveDevice(BluetoothProfile.A2DP))) {
-                    devices.add(d);
-                }
-            }
-        } catch (SecurityException ignored) {}
+    // ==================== 状态文件（去抖写） ====================
 
-        // 备用: 反射 getMostRecentlyConnectedDevices
-        try {
-            Method m = btAdapter.getClass().getMethod("getMostRecentlyConnectedDevices");
-            @SuppressWarnings("unchecked")
-            List<BluetoothDevice> list = (List<BluetoothDevice>) m.invoke(btAdapter);
-            if (list != null) devices.addAll(list);
-        } catch (Exception ignored) {}
+    private long lastStatusWrite;
 
-        // 对每个已连接设备查询 RSSI
-        for (BluetoothDevice d : devices) {
-            String mac = d.getAddress();
-            // 只查询配置了规则的设备
-            boolean interested = false;
-            for (TriggerRule r : config.rules) {
-                if (r.enable && mac.equalsIgnoreCase(r.mac)) { interested = true; break; }
-            }
-            if (!interested) continue;
-
-            String name = d.getName();
-            if (name != null) nameCache.put(mac, name);
-            queryRssi(d);
-        }
-
+    private void writeStatusThrottled() {
+        long now = System.currentTimeMillis();
+        if (now - lastStatusWrite < 1500) return;
+        lastStatusWrite = now;
         writeStatus();
     }
-
-    private String getActiveDevice(int profile) {
-        try {
-            Method m = btAdapter.getClass().getMethod("getActiveDevice", int.class);
-            BluetoothDevice d = (BluetoothDevice) m.invoke(btAdapter, profile);
-            return d != null ? d.getAddress() : null;
-        } catch (Exception e) { return null; }
-    }
-
-    private void queryRssi(BluetoothDevice device) {
-        // 方案1: 反射 getRssi() —— 隐藏API，多数HyperOS/小米ROM可用
-        try {
-            Method m = BluetoothDevice.class.getMethod("getRssi");
-            Integer rssi = (Integer) m.invoke(device);
-            if (rssi != null && rssi < 0 && rssi >= -100) {
-                handleRssi(device, rssi);
-                return;
-            }
-        } catch (Exception ignored) {}
-
-        // 方案2: 反射 mRssi 字段
-        try {
-            java.lang.reflect.Field f = BluetoothDevice.class.getDeclaredField("mRssi");
-            f.setAccessible(true);
-            Short rssi = (Short) f.get(device);
-            if (rssi != null && rssi < 0 && rssi >= -100) {
-                handleRssi(device, (int) rssi);
-                return;
-            }
-        } catch (Exception ignored) {}
-
-        // 方案3: 调用 readRemoteRssi() 触发异步读取
-        try {
-            Method m = BluetoothDevice.class.getMethod("readRemoteRssi");
-            m.invoke(device);
-        } catch (Exception ignored) {}
-    }
-
-    private void handleRssi(BluetoothDevice device, int rssi) {
-        String mac = device.getAddress();
-        Integer old = rssiCache.put(mac, rssi);
-        rssiTimeCache.put(mac, System.currentTimeMillis());
-        if (old != null && old == rssi) return;
-
-        String name = nameCache.getOrDefault(mac, "");
-        Log.d(TAG, "RSSI: " + mac + " = " + rssi + " dBm");
-        LogManager.d(TAG, "RSSI: " + mac + " = " + rssi);
-
-        if (engine != null) engine.evaluate(mac, name, rssi);
-    }
-
-    // ==================== 状态文件 ====================
 
     private void writeStatus() {
         try {
@@ -316,7 +288,7 @@ public class RssiForegroundService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
                     CHANNEL_ID, "蓝牙信号监听", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("蓝牙触发器后台运行状态");
+            ch.setDescription("BLE 扫描 RSSI 信号强度");
             getSystemService(NotificationManager.class).createNotificationChannel(ch);
         }
     }
