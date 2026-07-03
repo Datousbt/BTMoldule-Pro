@@ -9,6 +9,7 @@
 
     <application
         android:label="蓝牙触发器"
+        android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.RssiTrigger"
         android:allowBackup="false">
 

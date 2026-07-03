@@ -51,6 +51,7 @@ public class RuleEditActivity extends AppCompatActivity {
     private final List<BluetoothDevice> scannedDevices = new ArrayList<>();
     private AlertDialog scanDialog;
     private boolean scanning = false;
+    private boolean scanActuallyStarted = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -162,9 +163,18 @@ public class RuleEditActivity extends AppCompatActivity {
     }
 
     private void startScan() {
+        if (scanning) stopScan();
         scannedDevices.clear();
 
-        // 显示扫描中对话框
+        // 先确保蓝牙不在扫描状态
+        try {
+            if (btAdapter.isDiscovering()) {
+                btAdapter.cancelDiscovery();
+                // 等待取消生效
+                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+            }
+        } catch (SecurityException ignored) {}
+
         scanDialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.scanning)
                 .setMessage("正在扫描附近蓝牙设备 (最长15秒) ...")
@@ -173,12 +183,11 @@ public class RuleEditActivity extends AppCompatActivity {
                 .create();
         scanDialog.show();
 
-        // 15秒超时自动停止
+        // 15秒超时
         new android.os.Handler().postDelayed(() -> {
             if (scanning) stopScan();
         }, 15000);
 
-        // 注册广播接收
         IntentFilter filter = new IntentFilter();
         filter.addAction(BluetoothDevice.ACTION_FOUND);
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
@@ -188,29 +197,41 @@ public class RuleEditActivity extends AppCompatActivity {
         try {
             boolean ok = btAdapter.startDiscovery();
             if (!ok) {
-                stopScan();
-                Toast.makeText(this, "无法启动扫描，可能蓝牙正忙", Toast.LENGTH_SHORT).show();
+                try { Thread.sleep(300); } catch (InterruptedException ignored) {}
+                ok = btAdapter.startDiscovery();
+            }
+            if (ok) {
+                scanActuallyStarted = true;
+            } else {
+                stopScanNoResult();
+                Toast.makeText(this, "扫描启动失败：蓝牙可能正忙，请稍后再试", Toast.LENGTH_LONG).show();
             }
         } catch (SecurityException e) {
-            stopScan();
-            Toast.makeText(this, "扫描权限不足，请在系统设置中授权", Toast.LENGTH_SHORT).show();
+            stopScanNoResult();
+            Toast.makeText(this, "缺少蓝牙扫描权限，请在系统设置中授权", Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void stopScanNoResult() {
+        // 仅关闭扫描，不弹结果
+        scanning = false;
+        scanActuallyStarted = false;
+        try { btAdapter.cancelDiscovery(); } catch (SecurityException ignored) {}
+        try { unregisterReceiver(scanReceiver); } catch (IllegalArgumentException ignored) {}
+        if (scanDialog != null && scanDialog.isShowing()) scanDialog.dismiss();
     }
 
     private void stopScan() {
         if (!scanning) return;
         scanning = false;
-        try {
-            btAdapter.cancelDiscovery();
-        } catch (SecurityException ignored) {}
-        try {
-            unregisterReceiver(scanReceiver);
-        } catch (IllegalArgumentException ignored) {}
-        if (scanDialog != null && scanDialog.isShowing()) {
-            scanDialog.dismiss();
-        }
+        boolean hadRealScan = scanActuallyStarted;
+        scanActuallyStarted = false;
+        try { btAdapter.cancelDiscovery(); } catch (SecurityException ignored) {}
+        try { unregisterReceiver(scanReceiver); } catch (IllegalArgumentException ignored) {}
+        if (scanDialog != null && scanDialog.isShowing()) scanDialog.dismiss();
 
-        // 显示扫描结果
+        if (!hadRealScan) return; // 没真正开始扫描，不弹结果
+
         if (!scannedDevices.isEmpty()) {
             showDeviceDialog(new ArrayList<>(scannedDevices), R.string.select_scanned_device);
         } else {
