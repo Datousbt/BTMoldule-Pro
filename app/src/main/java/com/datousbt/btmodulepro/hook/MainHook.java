@@ -4,10 +4,12 @@ import android.bluetooth.BluetoothDevice;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
+import android.util.Log;
 
-import io.github.libxposed.api.XposedInterface.Chain;
-import io.github.libxposed.api.XposedModule;
-import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
+import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedHelpers;
+import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import com.datousbt.btmodulepro.util.LogManager;
 
@@ -17,9 +19,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class MainHook extends XposedModule {
+public class MainHook implements IXposedHookLoadPackage {
 
-    private static final String TAG = "MainHook";
+    private static final String TAG = "RssiTrigger";
     private static final int MODE_PASSIVE = 0, MODE_ACTIVE = 1, MODE_MIXED = 2;
 
     private static final String[] SYSTEM_SERVER_TARGETS = {
@@ -50,65 +52,69 @@ public class MainHook extends XposedModule {
     private static volatile HandlerThread pollThread;
     private static volatile Handler pollHandler;
     private static final AtomicBoolean pollRunning = new AtomicBoolean(false);
-    private static String configPath = "/data/data/com.datousbt.btmodulepro/files/rssi_config.json";
-    private static String statusPath = "/data/data/com.datousbt.btmodulepro/files/rssi_status.json";
+    private static final String configPath = "/data/data/com.datousbt.btmodulepro/files/rssi_config.json";
+    private static final String statusPath = "/data/data/com.datousbt.btmodulepro/files/rssi_status.json";
 
     @Override
-    public void onPackageLoaded(PackageLoadedParam param) {
-        String pkg = param.getPackageName();
-        ClassLoader cl = param.getDefaultClassLoader();
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
+        String pkg = lpparam.packageName;
 
         if ("android".equals(pkg)) {
+            Log.i(TAG, "=== system_server loaded ===");
             loadConfig();
-            hookSystemServer(cl);
+            hookPackage(lpparam.classLoader, SYSTEM_SERVER_TARGETS);
+
         } else if ("com.android.bluetooth".equals(pkg)) {
-            hookBluetoothApp(cl);
+            Log.i(TAG, "=== bluetooth app loaded ===");
+            hookPackage(lpparam.classLoader, BLUETOOTH_APP_TARGETS);
+
             int mode = engine != null ? engine.config.rssiMode : MODE_MIXED;
             int interval = engine != null ? engine.config.pollInterval : 5000;
-            if (mode == MODE_ACTIVE || mode == MODE_MIXED) startPolling(cl, interval);
-            else LogManager.i(TAG, "被动监听模式，跳过主动轮询");
+            if (mode == MODE_ACTIVE || mode == MODE_MIXED) {
+                startPolling(interval);
+            } else {
+                LogManager.i(TAG, "被动监听模式，跳过主动轮询");
+            }
         }
     }
 
     // --- hook 安装 ---
 
-    private void hookSystemServer(ClassLoader cl) {
-        for (String cn : SYSTEM_SERVER_TARGETS) {
-            if (tryHookClass(cl, cn) > 0) break;
+    private void hookPackage(ClassLoader cl, String[] targets) {
+        for (String className : targets) {
+            if (tryHookClass(cl, className)) break;
         }
-        LogManager.i(TAG, "system_server hooks done, targets: " + String.join(", ", SYSTEM_SERVER_TARGETS));
+        LogManager.i(TAG, "Hooks done");
     }
 
-    private void hookBluetoothApp(ClassLoader cl) {
-        for (String cn : BLUETOOTH_APP_TARGETS) {
-            if (tryHookClass(cl, cn) > 0) break;
-        }
-        LogManager.i(TAG, "bluetooth app hooks done, targets: " + String.join(", ", BLUETOOTH_APP_TARGETS));
-    }
-
-    private int tryHookClass(ClassLoader cl, String className) {
+    private boolean tryHookClass(ClassLoader cl, String className) {
         try {
-            Class<?> target = cl.loadClass(className);
+            Class<?> target = XposedHelpers.findClass(className, cl);
             LogManager.i(TAG, "Hook found: " + target.getName());
-            int count = hookRssiMethods(target);
-            count += hookHandlerIfPresent(target);
-            return count;
+            return hookMethods(target) + hookHandlerIfPresent(target) > 0;
         } catch (ClassNotFoundException e) {
             LogManager.d(TAG, "Hook not found: " + className);
-            return 0;
+            return false;
         } catch (Throwable t) {
             LogManager.e(TAG, "Hook error: " + className, t);
-            return 0;
+            return false;
         }
     }
 
-    private int hookRssiMethods(Class<?> target) {
+    private int hookMethods(Class<?> target) {
         int count = 0;
         for (Method m : target.getDeclaredMethods()) {
-            Class<?>[] types = m.getParameterTypes();
-            if (matchesRssiSig(types) || isRssiName(m.getName())) {
-                hook(m).intercept(this::onRssi);
-                count++;
+            if (matchesRssiSig(m.getParameterTypes()) || isRssiName(m.getName())) {
+                try {
+                    XposedHelpers.findAndHookMethod(target, m.getName(), m.getParameterTypes(),
+                            new XC_MethodHook() {
+                                @Override
+                                protected void beforeHookedMethod(MethodHookParam param) {
+                                    onRssi(param);
+                                }
+                            });
+                    count++;
+                } catch (Throwable ignored) {}
             }
         }
         LogManager.d(TAG, "  " + target.getSimpleName() + ": " + count + " method hooks");
@@ -133,12 +139,18 @@ public class MainHook extends XposedModule {
     private int hookHandlerIfPresent(Class<?> target) {
         int c = 0;
         for (Class<?> inner : target.getDeclaredClasses()) {
-            if (android.os.Handler.class.isAssignableFrom(inner)) {
+            if (Handler.class.isAssignableFrom(inner)) {
                 try {
-                    hook(inner.getMethod("handleMessage", Message.class)).intercept(this::onHandlerMsg);
+                    XposedHelpers.findAndHookMethod(inner, "handleMessage", Message.class,
+                            new XC_MethodHook() {
+                                @Override
+                                protected void beforeHookedMethod(MethodHookParam param) {
+                                    onHandlerMsg(param);
+                                }
+                            });
                     c++;
                     LogManager.i(TAG, "  Handler hook: " + inner.getSimpleName());
-                } catch (NoSuchMethodException ignored) {}
+                } catch (Throwable ignored) {}
             }
         }
         return c;
@@ -146,7 +158,7 @@ public class MainHook extends XposedModule {
 
     // --- 主动轮询 ---
 
-    private void startPolling(ClassLoader cl, int interval) {
+    private void startPolling(int interval) {
         if (pollRunning.getAndSet(true)) return;
         if (interval <= 0) interval = 5000;
         pollThread = new HandlerThread("RssiPoll");
@@ -183,23 +195,21 @@ public class MainHook extends XposedModule {
 
     // --- 回调 ---
 
-    private Object onHandlerMsg(Chain chain) throws Throwable {
+    private void onHandlerMsg(XC_MethodHook.MethodHookParam param) {
         try {
-            Message msg = (Message) chain.getArgs().get(0);
+            Message msg = (Message) param.args[0];
             if (msg != null && msg.obj instanceof BluetoothDevice) {
                 int r = msg.arg1;
                 if (r < 0 && r >= -100) processRssi((BluetoothDevice) msg.obj, r);
             }
         } catch (Throwable t) { LogManager.e(TAG, "Handler error", t); }
-        return chain.proceed();
     }
 
-    private Object onRssi(Chain chain) throws Throwable {
+    private void onRssi(XC_MethodHook.MethodHookParam param) {
         try {
-            Object[] args = chain.getArgs().toArray();
             BluetoothDevice dev = null;
             int rssi = Integer.MIN_VALUE;
-            for (Object a : args) {
+            for (Object a : param.args) {
                 if (a instanceof BluetoothDevice) dev = (BluetoothDevice) a;
                 else if (a instanceof Integer || a instanceof Short) {
                     int v = ((Number) a).intValue();
@@ -208,7 +218,6 @@ public class MainHook extends XposedModule {
             }
             if (dev != null && rssi != Integer.MIN_VALUE) processRssi(dev, rssi);
         } catch (Throwable t) { LogManager.e(TAG, "RSSI callback error", t); }
-        return chain.proceed();
     }
 
     // --- RSSI 处理 ---
@@ -224,33 +233,28 @@ public class MainHook extends XposedModule {
             if (old != null && old == rssi) return;
 
             LogManager.d(TAG, "RSSI: " + (name != null ? name : mac) + " = " + rssi + " dBm");
-
-            // RSSI 状态写入文件供 UI 读取
             writeRssiStatus();
 
             if (engine != null) engine.evaluate(mac, name != null ? name : "", rssi);
         } catch (Throwable t) { LogManager.e(TAG, "processRssi error", t); }
     }
 
-    // --- RSSI 状态文件 (供 UI 实时读取) ---
-
     private void writeRssiStatus() {
         try {
-            StringBuilder sb = new StringBuilder("{\n  \"devices\": {\n");
+            StringBuilder sb = new StringBuilder("{\"devices\":{");
             boolean first = true;
             for (Map.Entry<String, Integer> e : rssiCache.entrySet()) {
-                if (!first) sb.append(",\n");
+                if (!first) sb.append(",");
                 first = false;
                 String mac = e.getKey();
                 String name = nameCache.getOrDefault(mac, "");
                 long time = rssiTimeCache.getOrDefault(mac, 0L);
-                sb.append("    \"").append(mac).append("\": {");
-                sb.append("\"name\":\"").append(escapeJson(name)).append("\",");
+                sb.append("\"").append(mac).append("\":{");
+                sb.append("\"name\":\"").append(esc(name)).append("\",");
                 sb.append("\"rssi\":").append(e.getValue()).append(",");
-                sb.append("\"time\":").append(time);
-                sb.append("}");
+                sb.append("\"time\":").append(time).append("}");
             }
-            sb.append("\n  }\n}");
+            sb.append("}}");
             FileWriter fw = new FileWriter(statusPath);
             fw.write(sb.toString());
             fw.flush();
@@ -258,11 +262,9 @@ public class MainHook extends XposedModule {
         } catch (Throwable ignored) {}
     }
 
-    private static String escapeJson(String s) {
+    private static String esc(String s) {
         return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
-
-    // --- 配置 ---
 
     private static void loadConfig() {
         try {
